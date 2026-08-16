@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Norsk Tutor</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#1a1e26; --card2:#232936; --text:#e8eaf0; --dim:#8b93a5;
+    --accent:#4f8cff; --accent2:#3ddc84; --red:#ff5d5d; --amber:#ffb84d;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    overscroll-behavior:none;
+  }
+  header{
+    padding:14px 16px 10px; display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid #262c38;
+  }
+  header h1{font-size:17px; font-weight:700;}
+  header h1 span{color:var(--accent2);}
+  .hbtns{display:flex; gap:8px;}
+  .hbtn{
+    background:var(--card); color:var(--dim); border:1px solid #2c3342; border-radius:10px;
+    padding:7px 11px; font-size:13px; font-weight:600;
+  }
+  #chat{
+    flex:1; overflow-y:auto; padding:14px 14px 8px; display:flex; flex-direction:column; gap:10px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .bubble{
+    max-width:86%; padding:10px 14px; border-radius:16px; font-size:16px; line-height:1.45;
+    white-space:pre-wrap; word-wrap:break-word;
+  }
+  .me{align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:4px;}
+  .tutor{align-self:flex-start; background:var(--card2); border-bottom-left-radius:4px;}
+  .sys{align-self:center; background:none; color:var(--dim); font-size:13px; text-align:center; padding:2px 10px;}
+  .recap{align-self:stretch; background:#20261b; border:1px solid #3a4a2e; border-radius:14px; padding:12px 14px; font-size:15px; line-height:1.5; white-space:pre-wrap;}
+  .trans{
+    margin-top:8px; padding-top:8px; border-top:1px solid #333c4e;
+    color:#b7c3da; font-size:14px; font-style:italic; display:none;
+  }
+  .bubble.showT .trans{display:block;}
+  footer{padding:10px 14px 14px; border-top:1px solid #262c38;}
+  .row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  #micBtn{
+    flex:0 0 auto; width:84px; height:84px; border-radius:50%; border:none;
+    background:var(--accent); color:#fff; font-size:34px; font-weight:700;
+    box-shadow:0 4px 20px rgba(79,140,255,.35); transition:transform .1s, background .15s;
+  }
+  #micBtn:active{transform:scale(.94);}
+  #micBtn.listening{background:var(--red); box-shadow:0 0 0 10px rgba(255,93,93,.18), 0 0 0 22px rgba(255,93,93,.08); animation:pulse 1.2s infinite;}
+  #micBtn.busy{background:#5a6172;}
+  #micBtn.speaking{background:var(--accent2);}
+  @keyframes pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.05);}}
+  .sideBtn{
+    flex:1; background:var(--card); border:1px solid #2c3342; color:var(--text);
+    border-radius:14px; padding:12px 6px; font-size:14px; font-weight:600;
+  }
+  .sideBtn:active{background:var(--card2);}
+  #status{text-align:center; color:var(--dim); font-size:13px; margin-bottom:10px; min-height:18px;}
+  .toggleRow{display:flex; align-items:center; justify-content:center; gap:8px; margin-top:10px; color:var(--dim); font-size:13px;}
+  .switch{position:relative; width:44px; height:26px;}
+  .switch input{opacity:0; width:0; height:0;}
+  .slider{position:absolute; inset:0; background:#39414f; border-radius:26px; transition:.2s;}
+  .slider:before{content:""; position:absolute; width:20px; height:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s;}
+  input:checked + .slider{background:var(--accent2);}
+  input:checked + .slider:before{transform:translateX(18px);}
+  /* setup screen */
+  #setup{
+    position:fixed; inset:0; background:var(--bg); z-index:50; display:flex; flex-direction:column;
+    justify-content:center; padding:28px; gap:14px;
+  }
+  #setup h2{font-size:24px;} #setup h2 span{color:var(--accent2);}
+  #setup p{color:var(--dim); font-size:15px; line-height:1.5;}
+  #setup input{
+    background:var(--card); border:1px solid #2c3342; border-radius:12px; color:var(--text);
+    padding:14px; font-size:16px; width:100%;
+  }
+  #setup button{
+    background:var(--accent); color:#fff; border:none; border-radius:12px; padding:15px; font-size:16px; font-weight:700;
+  }
+  #setup a{color:var(--accent);}
+  .err{color:var(--red); font-size:14px; min-height:18px;}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <h2>Norsk<span>Tutor</span> 🇳🇴</h2>
+  <p>Your spoken Norwegian practice partner. To start, paste your Claude API key. It's stored only on this device.</p>
+  <p>Get a key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> → API Keys → Create Key.</p>
+  <input type="password" id="keyInput" placeholder="sk-ant-..." autocomplete="off">
+  <div class="err" id="keyErr"></div>
+  <button onclick="saveKey()">Start learning</button>
+</div>
+
+<header>
+  <h1>Norsk<span>Tutor</span></h1>
+  <div class="hbtns">
+    <button class="hbtn" onclick="newSession()">New</button>
+    <button class="hbtn" onclick="changeKey()">Key</button>
+  </div>
+</header>
+
+<div id="chat"></div>
+
+<footer>
+  <div id="status">Tap the mic and say hei!</div>
+  <div class="row">
+    <button class="sideBtn" onclick="translateLast()">🇬🇧 Translate</button>
+    <button id="micBtn" onclick="micTap()">🎙</button>
+    <button class="sideBtn" onclick="endSession()">🏁 Finish &amp; recap</button>
+  </div>
+  <div class="toggleRow">
+    <label class="switch"><input type="checkbox" id="engMode"><span class="slider"></span></label>
+    <span>🇬🇧 Speak English (ask questions, find words)</span>
+  </div>
+  <div class="toggleRow">
+    <label class="switch"><input type="checkbox" id="autoMode"><span class="slider"></span></label>
+    <span>Hands-free: keep listening after tutor speaks</span>
+  </div>
+</footer>
+
+<script>
+"use strict";
+
+// ---------- config ----------
+const MODEL = "claude-haiku-4-5";
+const API_URL = "https://api.anthropic.com/v1/messages";
+
+const SYSTEM_PROMPT = `You are a warm, encouraging Norwegian (bokmål) tutor having a SPOKEN conversation with Matthew. His level: knows greetings and simple phrases (A1-A2).
+
+LANGUAGE SWITCHING:
+- Mirror his language. If he speaks Norwegian, continue in simple Norwegian. If he speaks English, he wants classroom talk: answer in English — explain words or grammar, set up role plays (hotel, café, shop...), discuss how the session should run — then invite him back into Norwegian when natural.
+- In classroom talk he can change the session rules: start a role play, turn "correct me immediately" mode on or off, ask for slower/simpler Norwegian, change topic. Follow the current rules until he changes them.
+- You may mix languages in one reply (e.g. Norwegian greeting + English stage direction), but each part must be a single language.
+
+CONVERSATION RULES:
+- Norwegian: short, natural sentences (max ~15 words). One question at a time.
+- Input comes from speech recognition and may contain transcription errors — guess the intended meaning generously; never mock garbled input.
+- BE A TUTOR, not just a chat partner: if his sentence had an error, naturally model the correct form inside your reply (recasting), without pointing it out. Every few turns, teach ONE useful new word or phrase related to the topic, briefly.
+- Unless "correct me immediately" mode is on, don't explicitly correct mistakes mid-conversation. Silently remember every mistake (grammar, word choice, pronunciation-likely confusions) for the final recap.
+- If he asks "how do I say X" — in either language — answer with the Norwegian phrase.
+- Keep replies SHORT — this is spoken aloud, 1-3 sentences.
+
+OUTPUT FORMAT — reply with ONLY valid JSON, no markdown:
+{"parts":[{"t":"text to speak","lang":"nb"}],"trans":"English translation of the Norwegian parts (empty string if none)","listen":"nb"}
+- parts: your reply split into segments. "lang" is "nb" or "en" per segment; each is spoken aloud with that language's voice, in order.
+- listen: "nb" or "en" — the language Matthew will most likely SPEAK next, so his microphone can be set automatically. Classroom talk in English → "en"; when steering back to Norwegian practice → "nb".
+
+If the user message is exactly [SESSION_RECAP], instead return a recap in parts: mostly English segments covering 2-4 mistakes with corrections and a short explanation each, one thing he did well, one tip — but put every Norwegian example word or phrase in its own {"lang":"nb"} segment so it is pronounced correctly. If he made no mistakes, say so warmly. Plain text, no markdown. Use trans:"" and listen:"nb".`;
+
+// ---------- state ----------
+let messages = [];        // {role, content} for the API
+let listening = false;
+let busy = false;
+let recog = null;
+let noVoice = null, enVoice = null;
+
+const $ = id => document.getElementById(id);
+const chat = $("chat"), status = $("status"), micBtn = $("micBtn");
+
+// ---------- setup / key ----------
+function getKey(){ return localStorage.getItem("nt_key") || ""; }
+function saveKey(){
+  const k = $("keyInput").value.trim();
+  if(!k.startsWith("sk-ant-")){ $("keyErr").textContent = "That doesn't look like a Claude key (starts with sk-ant-)."; return; }
+  localStorage.setItem("nt_key", k);
+  $("setup").classList.add("hidden");
+  addSys("Ready. Tap the mic and start talking in Norwegian. Say things like «Hei! Hvordan går det?»");
+}
+function changeKey(){ $("setup").classList.remove("hidden"); $("keyInput").value = getKey(); }
+if(getKey()) { $("setup").classList.add("hidden"); addSys("Welcome back! Tap the mic to start."); }
+
+// ---------- voices ----------
+function pickVoices(){
+  const vs = speechSynthesis.getVoices();
+  noVoice = vs.find(v => /^(nb|no)/i.test(v.lang)) || null;
+  enVoice = vs.find(v => /^en/i.test(v.lang)) || null;
+}
+pickVoices();
+speechSynthesis.onvoiceschanged = pickVoices;
+
+function speak(text, lang, onDone){
+  if(!text){ if(onDone) onDone(); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang;
+  const v = lang.startsWith("nb") ? noVoice : enVoice;
+  if(v) u.voice = v;
+  u.rate = 0.95;
+  u.onend = () => { setMic("idle"); if(onDone) onDone(); };
+  u.onerror = () => { setMic("idle"); if(onDone) onDone(); };
+  setMic("speaking");
+  speechSynthesis.speak(u);
+}
+
+// Speak a sequence of {t, lang} parts, switching voice per part (nb vs en)
+function speakParts(parts, onDone){
+  speechSynthesis.cancel();
+  let i = 0;
+  const next = () => {
+    while(i < parts.length && !(parts[i] && parts[i].t)) i++;
+    if(i >= parts.length){ setMic("idle"); if(onDone) onDone(); return; }
+    const p = parts[i++];
+    const isNb = p.lang !== "en";
+    const u = new SpeechSynthesisUtterance(p.t);
+    u.lang = isNb ? "nb-NO" : "en-GB";
+    const v = isNb ? noVoice : enVoice;
+    if(v) u.voice = v;
+    u.rate = 0.95;
+    u.onend = next;
+    u.onerror = next;
+    speechSynthesis.speak(u);
+  };
+  setMic("speaking");
+  next();
+}
+
+// ---------- UI helpers ----------
+function addBubble(cls, text){
+  const d = document.createElement("div");
+  d.className = "bubble " + cls;
+  d.textContent = text;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+function addSys(t){ const d = document.createElement("div"); d.className="sys"; d.textContent=t; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; }
+function addTutor(no, en){
+  const d = addBubble("tutor", no);
+  const t = document.createElement("div");
+  t.className = "trans"; t.textContent = en;
+  d.appendChild(t);
+  d.onclick = () => d.classList.toggle("showT");
+  return d;
+}
+function setMic(state){
+  micBtn.className = "";
+  if(state==="listening"){
+    micBtn.classList.add("listening"); micBtn.textContent="✅";
+    status.textContent = $("autoMode").checked
+      ? "Listening… I'll send after a ~3s pause"
+      : "Listening — take your time. Tap ✅ when done";
+  }
+  else if(state==="busy"){ micBtn.classList.add("busy"); micBtn.textContent="…"; status.textContent="Thinking…"; }
+  else if(state==="speaking"){ micBtn.classList.add("speaking"); micBtn.textContent="🔊"; status.textContent="Tutor is speaking… (tap bubble for translation)"; }
+  else { micBtn.textContent="🎙"; status.textContent="Tap the mic to talk"; }
+}
+
+// ---------- speech recognition ----------
+// Patient listening: text accumulates while you think. In manual mode nothing is
+// sent until you tap the mic again. In hands-free mode it sends after SILENCE_MS
+// of quiet. If the browser's recognizer gives up during a pause, we restart it.
+const SILENCE_MS = 3000;
+let pending = "";           // accumulated final transcript
+let stopRequested = false;  // user (or fatal error) asked us to finish
+let silenceTimer = null;
+
+function inputLang(){ return $("engMode").checked ? "en-GB" : "nb-NO"; }
+
+function makeRecog(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ addSys("⚠️ Speech recognition isn't supported in this browser. On iPhone and Mac, use Safari."); return null; }
+  const r = new SR();
+  r.lang = inputLang();
+  r.continuous = true;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+  r.onresult = e => {
+    let interim = "";
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const t = e.results[i][0].transcript;
+      if(e.results[i].isFinal) pending += (pending ? " " : "") + t.trim();
+      else interim += t;
+    }
+    const shown = (pending + " " + interim).trim();
+    if(shown) status.textContent = "🎤 " + shown;
+    if($("autoMode").checked && pending.trim()) armSilenceTimer();
+  };
+  r.onend = () => {
+    if(listening && !stopRequested){
+      // recognizer timed out during a thinking pause — quietly keep listening
+      try { r.start(); return; } catch(err){}
+    }
+    finishUtterance();
+  };
+  r.onerror = e => {
+    if(e.error === "no-speech" || e.error === "aborted") return; // onend decides
+    stopRequested = true;
+    if(e.error === "not-allowed" || e.error === "service-not-allowed") addSys("⚠️ Speech recognition blocked (" + e.error + "). On Mac: turn on System Settings → Keyboard → Dictation, then reload this page. Also allow the mic via the aA icon in the address bar.");
+    else if(e.error === "language-not-supported") addSys("⚠️ " + (inputLang()==="nb-NO" ? "Norwegian" : "English") + " speech recognition isn't available on this device. On iPhone, add the language: Settings → General → Keyboard → Dictation.");
+    else addSys("Mic error: " + e.error);
+  };
+  return r;
+}
+
+function armSilenceTimer(){
+  clearTimeout(silenceTimer);
+  silenceTimer = setTimeout(() => { if(listening && pending.trim()) stopListening(); }, SILENCE_MS);
+}
+
+function finishUtterance(){
+  clearTimeout(silenceTimer); silenceTimer = null;
+  if(!listening) return;
+  listening = false;
+  const text = pending.trim();
+  pending = "";
+  if(text) handleUser(text);
+  else {
+    if(stopRequested) addSys("I didn't catch anything. Check the right mic is selected and try again — take all the time you need.");
+    setMic("idle");
+  }
+}
+
+function startListening(){
+  if(busy || listening) return;
+  speechSynthesis.cancel();
+  recog = makeRecog(); // recreate so the 🇬🇧/🇳🇴 toggle takes effect
+  if(!recog) return;
+  pending = ""; stopRequested = false;
+  try { recog.start(); listening = true; setMic("listening"); }
+  catch(err){ listening = false; setMic("idle"); }
+}
+
+function stopListening(){
+  stopRequested = true;
+  try { recog.stop(); } catch(err){ finishUtterance(); }
+}
+
+function micTap(){
+  if(listening){ stopListening(); return; }
+  if(busy) return;
+  // warm up TTS on a user gesture (iOS requirement)
+  if(!window.__ttsWarm){ const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); window.__ttsWarm = true; }
+  startListening();
+}
+
+// ---------- Claude ----------
+async function askClaude(userText){
+  const body = {
+    model: MODEL,
+    max_tokens: 700,
+    system: SYSTEM_PROMPT,
+    messages: [...messages, {role:"user", content:userText}]
+  };
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": getKey(),
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    const errText = await res.text();
+    if(res.status === 401) throw new Error("Your API key was rejected. Tap 'Key' to re-enter it.");
+    if(res.status === 429) throw new Error("Rate limit hit — wait a few seconds and try again.");
+    throw new Error("API error " + res.status + ": " + errText.slice(0,120));
+  }
+  const data = await res.json();
+  const raw = (data.content && data.content[0] && data.content[0].text || "").trim();
+  messages.push({role:"user", content:userText});
+  messages.push({role:"assistant", content:raw});
+  // parse JSON, tolerating stray text around it (and the old {no,en} format)
+  try {
+    const m = raw.match(/\{[\s\S]*\}/);
+    const j = JSON.parse(m ? m[0] : raw);
+    let parts = Array.isArray(j.parts) ? j.parts.filter(p => p && p.t) : [];
+    if(!parts.length){
+      if(j.no) parts.push({t: j.no, lang: "nb"});
+      else if(j.en) parts.push({t: j.en, lang: "en"});
+    }
+    return { parts, trans: j.trans || j.en || "", listen: j.listen === "en" ? "en" : "nb" };
+  } catch(e){
+    return { parts: [{t: raw, lang: "nb"}], trans: "", listen: "nb" };
+  }
+}
+
+async function handleUser(text){
+  addBubble("me", text);
+  busy = true; setMic("busy");
+  try {
+    const r = await askClaude(text);
+    busy = false;
+    addTutor(r.parts.map(p => p.t).join(" "), r.trans);
+    $("engMode").checked = (r.listen === "en"); // mic auto-follows the tutor
+    speakParts(r.parts, () => {
+      if($("autoMode").checked) setTimeout(startListening, 350);
+    });
+  } catch(err){
+    busy = false; setMic("idle");
+    addSys("⚠️ " + err.message);
+  }
+}
+
+// ---------- actions ----------
+function translateLast(){
+  const bubbles = chat.querySelectorAll(".bubble.tutor");
+  if(!bubbles.length){ addSys("Nothing to translate yet."); return; }
+  const last = bubbles[bubbles.length-1];
+  last.classList.add("showT");
+  const en = last.querySelector(".trans").textContent;
+  chat.scrollTop = chat.scrollHeight;
+  if(en) speak(en, "en-GB");
+}
+
+async function endSession(){
+  if(busy) return;
+  if(!messages.length){ addSys("Have a conversation first, then finish for your recap."); return; }
+  busy = true; setMic("busy"); status.textContent = "Preparing your recap…";
+  try {
+    const r = await askClaude("[SESSION_RECAP]");
+    busy = false; setMic("idle");
+    const d = document.createElement("div");
+    d.className = "recap"; d.textContent = "📋 Session recap\n\n" + r.parts.map(p => p.t).join(" ");
+    chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
+    speakParts(r.parts);
+  } catch(err){
+    busy = false; setMic("idle");
+    addSys("⚠️ " + err.message);
+  }
+}
+
+$("engMode").onchange = e => {
+  addSys(e.target.checked
+    ? "🇬🇧 Mic set to English. (It also follows the conversation automatically — this is just an override.)"
+    : "🇳🇴 Mic set to Norwegian.");
+};
+
+function newSession(){
+  speechSynthesis.cancel();
+  messages = [];
+  chat.innerHTML = "";
+  addSys("New session. Tap the mic — snakk norsk!");
+  setMic("idle");
+}
+</script>
+</body>
+</html>
