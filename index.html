@@ -48,6 +48,7 @@
     color:#b7c3da; font-size:14px; font-style:italic; display:none;
   }
   .bubble.showT .trans{display:block;}
+  .me .trans{border-top-color:rgba(255,255,255,.4); color:#e4eeff;}
   footer{padding:10px 14px 14px; border-top:1px solid #262c38;}
   .row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
   #micBtn{
@@ -153,11 +154,12 @@ CONVERSATION RULES:
 - Keep replies SHORT — this is spoken aloud, 1-3 sentences.
 
 OUTPUT FORMAT — reply with ONLY valid JSON, no markdown:
-{"parts":[{"t":"text to speak","lang":"nb"}],"trans":"English translation of the Norwegian parts (empty string if none)","listen":"nb"}
+{"parts":[{"t":"text to speak","lang":"nb"}],"trans":"English translation of the Norwegian parts (empty string if none)","heard":"English of what Matthew just said","listen":"nb"}
 - parts: your reply split into segments. "lang" is "nb" or "en" per segment; each is spoken aloud with that language's voice, in order.
+- heard: a literal English translation of Matthew's message as you understood it — this shows him whether the speech recognition captured him correctly. Translate what he actually said, including any errors, rather than a polished version; if a word was clearly garbled, use your best guess followed by (?). Use "" if he spoke English or said nothing meaningful.
 - listen: "nb" or "en" — the language Matthew will most likely SPEAK next, so his microphone can be set automatically. Classroom talk in English → "en"; when steering back to Norwegian practice → "nb".
 
-If the user message is exactly [SESSION_RECAP], instead return a recap in parts: mostly English segments covering 2-4 mistakes with corrections and a short explanation each, one thing he did well, one tip — but put every Norwegian example word or phrase in its own {"lang":"nb"} segment so it is pronounced correctly. If he made no mistakes, say so warmly. Plain text, no markdown. Use trans:"" and listen:"nb".`;
+If the user message is exactly [SESSION_RECAP], use heard:"" and return a recap in parts: mostly English segments covering 2-4 mistakes with corrections and a short explanation each, one thing he did well, one tip — but put every Norwegian example word or phrase in its own {"lang":"nb"} segment so it is pronounced correctly. If he made no mistakes, say so warmly. Plain text, no markdown. Use trans:"" and listen:"nb".`;
 
 // ---------- state ----------
 let messages = [];        // {role, content} for the API
@@ -236,12 +238,17 @@ function addBubble(cls, text){
   return d;
 }
 function addSys(t){ const d = document.createElement("div"); d.className="sys"; d.textContent=t; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; }
-function addTutor(no, en){
-  const d = addBubble("tutor", no);
+function attachTrans(bubble, en){
+  if(!bubble || !en) return;
   const t = document.createElement("div");
   t.className = "trans"; t.textContent = en;
-  d.appendChild(t);
-  d.onclick = () => d.classList.toggle("showT");
+  bubble.appendChild(t);
+  bubble.onclick = () => bubble.classList.toggle("showT");
+  chat.scrollTop = chat.scrollHeight;
+}
+function addTutor(no, en){
+  const d = addBubble("tutor", no);
+  attachTrans(d, en);
   return d;
 }
 function setMic(state){
@@ -382,18 +389,19 @@ async function askClaude(userText){
       if(j.no) parts.push({t: j.no, lang: "nb"});
       else if(j.en) parts.push({t: j.en, lang: "en"});
     }
-    return { parts, trans: j.trans || j.en || "", listen: j.listen === "en" ? "en" : "nb" };
+    return { parts, trans: j.trans || j.en || "", heard: j.heard || "", listen: j.listen === "en" ? "en" : "nb" };
   } catch(e){
-    return { parts: [{t: raw, lang: "nb"}], trans: "", listen: "nb" };
+    return { parts: [{t: raw, lang: "nb"}], trans: "", heard: "", listen: "nb" };
   }
 }
 
 async function handleUser(text){
-  addBubble("me", text);
+  const mine = addBubble("me", text);
   busy = true; setMic("busy");
   try {
     const r = await askClaude(text);
     busy = false;
+    attachTrans(mine, r.heard);   // tap your own bubble to see what it understood
     addTutor(r.parts.map(p => p.t).join(" "), r.trans);
     $("engMode").checked = (r.listen === "en"); // mic auto-follows the tutor
     speakParts(r.parts, () => {
@@ -407,11 +415,14 @@ async function handleUser(text){
 
 // ---------- actions ----------
 function translateLast(){
+  const mine = chat.querySelectorAll(".bubble.me");
+  if(mine.length) mine[mine.length-1].classList.add("showT"); // what it heard from you
   const bubbles = chat.querySelectorAll(".bubble.tutor");
   if(!bubbles.length){ addSys("Nothing to translate yet."); return; }
   const last = bubbles[bubbles.length-1];
   last.classList.add("showT");
-  const en = last.querySelector(".trans").textContent;
+  const t = last.querySelector(".trans");
+  const en = t ? t.textContent : "";
   chat.scrollTop = chat.scrollHeight;
   if(en) speak(en, "en-GB");
 }
