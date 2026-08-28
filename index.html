@@ -270,6 +270,7 @@ function setMic(state){
 // of quiet. If the browser's recognizer gives up during a pause, we restart it.
 const SILENCE_MS = 3000;
 let pending = "";           // accumulated final transcript
+let interimText = "";       // words still provisional — kept so the tail isn't lost
 let stopRequested = false;  // user (or fatal error) asked us to finish
 let silenceTimer = null;
 
@@ -290,13 +291,15 @@ function makeRecog(){
       if(e.results[i].isFinal) pending += (pending ? " " : "") + t.trim();
       else interim += t;
     }
+    interimText = interim;
     const shown = (pending + " " + interim).trim();
     if(shown) status.textContent = "🎤 " + shown;
     if($("autoMode").checked && pending.trim()) armSilenceTimer();
   };
   r.onend = () => {
     if(listening && !stopRequested){
-      // recognizer timed out during a thinking pause — quietly keep listening
+      // recognizer timed out during a thinking pause — bank any loose words, keep listening
+      if(interimText.trim()){ pending += (pending ? " " : "") + interimText.trim(); interimText = ""; }
       try { r.start(); return; } catch(err){}
     }
     finishUtterance();
@@ -320,8 +323,9 @@ function finishUtterance(){
   clearTimeout(silenceTimer); silenceTimer = null;
   if(!listening) return;
   listening = false;
-  const text = pending.trim();
-  pending = "";
+  // include any still-provisional words, or the end of the sentence gets dropped
+  const text = (pending + " " + interimText).trim();
+  pending = ""; interimText = "";
   if(text) handleUser(text);
   else {
     if(stopRequested) addSys("I didn't catch anything. Check the right mic is selected and try again — take all the time you need.");
@@ -334,7 +338,7 @@ function startListening(){
   speechSynthesis.cancel();
   recog = makeRecog(); // recreate so the 🇬🇧/🇳🇴 toggle takes effect
   if(!recog) return;
-  pending = ""; stopRequested = false;
+  pending = ""; interimText = ""; stopRequested = false;
   try { recog.start(); listening = true; setMic("listening"); }
   catch(err){ listening = false; setMic("idle"); }
 }
