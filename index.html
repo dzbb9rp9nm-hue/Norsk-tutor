@@ -4,7 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#174c42">
 <meta name="description" content="Your patient Norwegian conversation partner. Practise everyday situations and save useful phrases at your own pace.">
 <title>Norsk Tutor · A little Norwegian, every day</title>
-<link rel="stylesheet" href="styles.css"><script src="tutor-prompt.js" defer></script><script src="app.js" defer></script>
+<link rel="stylesheet" href="styles.css"><script src="scenarios.js" defer></script><script src="tutor-prompt.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to practice</a>
@@ -17,7 +17,7 @@
 <button class="nav-button" data-view="history"><span aria-hidden="true">↶</span> Saved sessions</button>
 </nav>
 <div class="sidebar-note"><span class="eyebrow">YOUR PACE IS THE RIGHT PACE</span><p>A pause is part of learning.<br>Take all the time you need.</p></div>
-<button id="settings-button" class="settings-button">Settings &amp; connection</button><p class="local-note">Learning saved in this browser.</p>
+<button id="settings-button" class="settings-button">Settings &amp; connection</button><p id="save-status" class="local-note" role="status">Learning saved in this browser.</p>
 </aside>
 <main id="main" tabindex="-1">
 <header class="page-header"><div><span class="eyebrow">YOUR NORWEGIAN COMPANION</span><h1 id="page-title">Let's practise.</h1></div><div class="header-actions"><button id="stop-audio" class="subtle" hidden>Stop playback</button><span class="level-badge">Bokmål · Beginner</span></div></header>
@@ -25,12 +25,14 @@
 <section id="practice-view" aria-label="Practice">
 <div id="welcome">
 <div class="welcome-heading"><h2>Small conversations.<br><em>Real confidence.</em></h2><p>Choose a situation, or simply have a chat.<br>Your tutor will help you find the words.</p></div>
-<div class="scenario-grid">
-<button class="scenario featured" data-scenario="cafe"><span class="scenario-icon" aria-hidden="true">☕</span><span class="eyebrow">TODAY'S SUGGESTION · 5 MIN</span><strong>A coffee, please</strong><span>Order a drink and ask the price.</span><span class="scenario-link">Practise at a café <span aria-hidden="true">↗</span></span></button>
-<button class="scenario" data-scenario="introductions"><span class="scenario-icon" aria-hidden="true">👋</span><span class="eyebrow">MEETING PEOPLE · 5 MIN</span><strong>Hei! I'm Matthew.</strong><span>Introduce yourself and get acquainted.</span><span class="scenario-link">Say hello <span aria-hidden="true">↗</span></span></button>
-<button class="scenario" data-scenario="shop"><span class="scenario-icon" aria-hidden="true">🛍</span><span class="eyebrow">OUT &amp; ABOUT · 5 MIN</span><strong>In the shop</strong><span>Find what you need and ask the price.</span><span class="scenario-link">Go shopping <span aria-hidden="true">↗</span></span></button>
-</div>
 <button id="free-chat" class="free-chat">Just feel like talking? <strong>Start a free conversation →</strong></button>
+<div class="scenario-browser">
+<div class="scenario-filters"><label for="scenario-search">Find a situation<input id="scenario-search" type="search" maxlength="100" placeholder="Try hotel, food, or weekend…"></label><label for="scenario-category">Browse by topic<select id="scenario-category"><option value="all">All topics</option><option>Food &amp; drink</option><option>Travel</option><option>Daily life</option><option>People &amp; leisure</option></select></label></div>
+<p id="scenario-count" class="section-intro" role="status"></p>
+<div id="scenario-grid" class="scenario-grid"></div>
+<p id="scenario-empty" class="empty-state" hidden>No matching situations. Try another word or choose All topics.</p>
+</div>
+
 <div class="welcome-tip"><span aria-hidden="true">✦</span><p><strong>No perfect sentences needed.</strong> Speak a little Norwegian, ask for help in English, and use hints whenever you like.</p></div>
 </div>
 <section id="lesson" hidden aria-label="Current conversation">
@@ -47,7 +49,7 @@
 <div id="finished-actions" class="finished-actions" hidden><p>This recap is saved in this browser.</p><button id="another-session" class="primary">Choose another practice</button></div>
 </section>
 </section>
-<section id="notebook-view" hidden aria-label="Phrase notebook"><p class="section-intro">Useful words from your conversations, ready to hear again.</p><div class="section-actions"><button id="add-phrase" class="primary">Add a phrase</button><button id="export-data" class="subtle">Export learning backup</button><label class="subtle import-label">Import backup<input id="import-data" type="file" accept="application/json,.json" class="sr-only"></label></div><div id="phrase-list" class="saved-list"></div></section>
+<section id="notebook-view" hidden aria-label="Phrase notebook"><p class="section-intro">Useful words from your conversations, ready to hear again.</p><div class="section-actions"><button id="add-phrase" class="primary">Add a phrase</button><button id="export-data" class="subtle">Export learning backup</button><button id="export-recovery" class="subtle" hidden>Download recovery copy</button><label class="subtle import-label">Import backup<input id="import-data" type="file" accept="application/json,.json" class="sr-only"></label></div><div id="phrase-list" class="saved-list"></div></section>
 <section id="history-view" hidden aria-label="Saved sessions"><p class="section-intro">Pick up where you left off, or revisit something you learned.</p><div id="session-list" class="saved-list"></div></section>
 </main>
 </div>

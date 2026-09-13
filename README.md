@@ -4,7 +4,7 @@ A personal Norwegian Bokmål practice app for a beginner. Hosted as static files
 
 ## This release
 
-- Café, introductions, shopping, and free conversation.
+- 24 guided situations across food, travel, daily life, and social conversation, plus free conversation. Search and filter by topic.
 - Norwegian-first tutoring, English help, and three stages of hints.
 - Typed messages or microphone input, with editable transcripts by default.
 - Optional hands-free conversation, with 3, 5, or 8 seconds of thinking time.
@@ -22,7 +22,7 @@ From this folder, run:
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:8765` in a browser. There is no dependency installation or build step.
+Open `http://127.0.0.1:8765` in a browser. No dependency installation is needed. For a publication-ready preview with the security headers enabled, run `node scripts/build.cjs` and then `python3 scripts/preview.py`, and open `http://127.0.0.1:8766`.
 
 For conversation, use Settings & connection to enter your own Claude API key. Starting a scenario and browsing phrase cards require no key. The key saved on the live website is separate from the key saved on localhost because browsers separate storage by website address.
 
@@ -32,6 +32,10 @@ For conversation, use Settings & connection to enter your own Claude API key. St
 - `styles.css`: desktop and mobile layout.
 - `app.js`: lessons, microphone/playback, requests, and saved learning.
 - `tutor-prompt.js`: teaching instructions.
+- `scenarios.js`: the guided practice library.
+- `_headers`: browser security and caching rules.
+- `netlify.toml` and `scripts/build.cjs`: publish only the allowlisted app files.
+- `SECURITY.md`: implemented protections and the pending cloud architecture.
 - `tests/app.test.cjs`: automated behavior checks using simulated browser APIs and replies.
 
 ## Tests
@@ -39,7 +43,7 @@ For conversation, use Settings & connection to enter your own Claude API key. St
 With Node.js installed:
 
 ```sh
-node --test tests/app.test.cjs
+node --test tests/*.test.cjs
 node --check app.js
 ```
 
@@ -59,6 +63,10 @@ Requests include the most recent 40 conversation messages, plus the active scena
 
 ## Publishing
 
-Netlify currently publishes `main`. This app remains static: publish the repository root, with no build command. Include all four app files above together. Do not push a new version to `main` until it is ready to go live.
+Netlify currently publishes `main`. This app remains static. `netlify.toml` runs `node scripts/build.cjs` and publishes only `dist/`, so tests, notes, database scripts and private configuration are excluded. Do not push a new version to `main` until it is ready to go live.
 
 See `ROADMAP.md` for the remaining approved improvements.
+
+## Cloud storage status
+
+This release includes the security/scenario expansion. Sign-in and cloud sync are not active. The Supabase project has been created and the migration installed by the owner; its three SQL checks passed. A live unauthenticated read was correctly rejected. Backend implementation, hosted account-isolation tests and a restore test remain before activating cloud storage. See `SUPABASE-SETUP.md`.

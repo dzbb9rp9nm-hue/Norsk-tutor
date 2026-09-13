@@ -11,7 +11,7 @@ function app(stored={}){
  const timers=new Map();let timerId=0;const spoken=[];let latestRecognition;
  class Recognition {constructor(){latestRecognition=this}start(){}stop(){this.onend?.()}abort(){this.onend?.()}}
  const context=vm.createContext({console,crypto:webcrypto,AbortController,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
- vm.runInContext(fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={startSession,newSession,runJob,parseReply,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,get state(){return {active,data,busy,retryJob,prefs}}, get recognition(){return recognition}};',context);
+ vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,get state(){return {active,data,busy,retryJob,prefs}}, get recognition(){return recognition}};',context);
  return {context,api:context.testing,get,store,timers,spoken,recognition:()=>latestRecognition};
 }
 const reply={parts:[{t:'Vil du ha melk?',lang:'nb'}],trans:'Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
@@ -73,4 +73,41 @@ test('stop playback cancels queued segments and hands-free continuation',async()
 });
 test('learning export contains sessions and phrases but excludes saved credentials',async()=>{
  const a=app({'nt_key':'sk-ant-private-test-value'});a.api.startSession('cafe');let exported;a.context.URL={createObjectURL:blob=>{exported=blob;return 'blob:test'},revokeObjectURL(){}};a.api.exportBackup();const content=await exported.text();assert.ok(content.includes('cafe'));assert.ok(!content.includes('sk-ant-private-test-value'));assert.ok(a.api.validData(JSON.parse(content)));
+});
+
+test('all 24 guided situations have valid beginner openings and survive reload',()=>{
+ const a=app();const guided=Object.keys(a.api.SCENARIOS).filter(k=>k!=='free');assert.equal(guided.length,24);
+ for(const key of guided){const s=a.api.SCENARIOS[key];assert.ok(s.category);assert.equal(s.phrases.length,3);assert.ok(s.phrases.every(p=>p.length===2&&p.every(t=>typeof t==='string'&&t.length>0)));a.api.startSession(key);assert.ok(a.api.validData(a.api.state.data));}
+ const b=app(Object.fromEntries(a.store));assert.equal(b.api.state.data.sessions.length,24);assert.equal(b.api.state.active.scenario,'haircut');
+});
+test('scenario search and category filters compose and show empty results',()=>{
+ const a=app();a.get('scenario-category').value='Travel';a.get('scenario-search').value='train';a.api.renderScenarios();assert.equal(a.get('scenario-grid').children.length,1);
+ a.get('scenario-search').value='no-such-situation';a.api.renderScenarios();assert.equal(a.get('scenario-grid').children.length,0);assert.equal(a.get('scenario-empty').hidden,false);
+});
+test('corrupt learning is retained instead of overwritten by a new session',()=>{
+ const raw='{broken';const a=app({'nt_learning_v1':raw});a.api.startSession('cafe');assert.equal(a.store.get('nt_learning_v1'),raw);assert.equal(a.api.save(),false);assert.equal(a.get('export-recovery').hidden,false);
+});
+test('structurally invalid saved learning is protected and recovery remains available',()=>{
+ const raw=JSON.stringify({version:1,sessions:'invalid'});const a=app({'nt_learning_v1':raw});a.api.startSession('cafe');assert.equal(a.store.get('nt_learning_v1'),raw);assert.equal(a.get('save-status').textContent,'Not saved · export a backup');
+});
+test('a newer copy saved by another tab cannot be silently overwritten',()=>{
+ const a=app();a.api.startSession('cafe');const other=JSON.parse(a.store.get('nt_learning_v1'));other.sessions[0].draft='Saved in another tab';const raw=JSON.stringify(other);a.store.set('nt_learning_v1',raw);draft(a,'My independent draft');assert.equal(a.store.get('nt_learning_v1'),raw);assert.equal(a.api.state.active.draft,'My independent draft');assert.equal(a.api.save(),false);
+});
+test('storage quota errors keep the current draft and display an unsaved warning',()=>{
+ const a=app();a.api.startSession('cafe');a.context.localStorage.setItem=()=>{throw Error('quota')};draft(a);assert.equal(a.api.state.active.draft,job.text);assert.equal(a.get('save-status').textContent,'Not saved · export a backup');
+});
+test('duplicate IDs, invalid hints and malformed role histories are rejected',()=>{
+ const a=app();a.api.startSession('cafe');const valid=JSON.parse(a.store.get('nt_learning_v1'));
+ const duplicate=structuredClone(valid);duplicate.sessions.push(duplicate.sessions[0]);assert.equal(a.api.validData(duplicate),false);
+ const badHint=structuredClone(valid);badHint.sessions[0].hintLevel='NaN';assert.equal(a.api.validData(badHint),false);
+ const badRole=structuredClone(valid);badRole.sessions[0].api[0].role='system';assert.equal(a.api.validData(badRole),false);
+});
+test('imports reject invalid data before mutating current learning',()=>{
+ const a=app();a.api.startSession('cafe');const before=JSON.stringify(a.api.state.data);assert.throws(()=>a.api.importLearning({version:1,sessions:[],phrases:[{id:'bad'}]}));assert.equal(JSON.stringify(a.api.state.data),before);
+});
+test('null and oversized model replies fail safely without rendering raw output',()=>{
+ const a=app();assert.throws(()=>a.api.parseReply('null'),/incomplete/);assert.throws(()=>a.api.parseReply('x'.repeat(60001)),/too large/);assert.throws(()=>a.api.parseReply(JSON.stringify({parts:[{t:'x'.repeat(5001),lang:'nb'}]})),/incomplete/);
+});
+test('offline sends and oversized inputs never contact the tutor',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');draft(a);a.context.navigator={onLine:false};await a.api.runJob(job);assert.equal(a.api.state.active.messages.length,1);assert.equal(a.api.state.active.draft,job.text);a.context.navigator.onLine=true;await a.api.runJob({...job,text:'x'.repeat(2001)});assert.equal(a.api.state.active.messages.length,1);
 });

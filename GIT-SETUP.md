@@ -44,7 +44,7 @@ At app.netlify.com:
 
 1. **Add new site → Import an existing project → GitHub**
 2. Authorise Netlify, pick your Norsk Tutor repository
-3. Leave build command and publish directory **empty** — there is no build step; the app uses HTML, CSS, and JavaScript files at the repository root
+3. Use the checked-in `netlify.toml`: build command **node scripts/build.cjs**, publish directory **dist**. The build copies only the app files, keeping tests and private setup files out of the website.
 4. Deploy
 
 You'll get a new URL. In **Site configuration → Change site name** you can rename it, and if you'd rather keep your existing site's address, connect the repo to that site instead (its **Site configuration → Build & deploy → Link repository**).

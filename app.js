@@ -1,26 +1,37 @@
 "use strict";
 
 const $ = id => document.getElementById(id);
-const SCENARIOS = {
-  cafe: {title:"A coffee, please", goal:"Order a drink and ask the price.", role:"You are a café worker. Help the learner order a drink and ask the price. Keep this to a short beginner role play.", opening:"Hei! Hva vil du ha?", translation:"Hi! What would you like?", phrases:[["Jeg vil gjerne ha en kaffe.","I would like a coffee."],["Hva koster det?","How much does it cost?"],["Tusen takk!","Thank you very much!"]]},
-  introductions: {title:"Hei! I'm Matthew.", goal:"Introduce yourself and get acquainted.", role:"You are meeting the learner for the first time. Practise names, where you come from, and one interest.", opening:"Hei! Jeg heter Nora. Hva heter du?", translation:"Hi! My name is Nora. What is your name?", phrases:[["Jeg heter Matthew.","My name is Matthew."],["Jeg kommer fra Storbritannia.","I come from the United Kingdom."],["Hyggelig å møte deg.","Nice to meet you."]]},
-  shop: {title:"In the shop", goal:"Find what you need and ask the price.", role:"You are a shop assistant. Help the learner find an item, ask its price, and buy it. Use simple everyday vocabulary.", opening:"Hei! Kan jeg hjelpe deg?", translation:"Hi! Can I help you?", phrases:[["Jeg ser etter en genser.","I'm looking for a jumper."],["Hvor mye koster den?","How much does it cost?"],["Jeg tar den.","I'll take it."]]},
-  free: {title:"A little conversation", goal:"Talk about your day, your interests, or anything you like.", role:"Have a relaxed beginner conversation about the learner's day and interests.", opening:"Hei, Matthew! Hvordan har du det?", translation:"Hi, Matthew! How are you?", phrases:[["Jeg har det bra.","I'm doing well."],["Kan du si det en gang til?","Can you say that again?"],["Jeg forstår ikke.","I don't understand."]]}
-};
 const DEFAULT_PREFS = {speed:0.9, corrections:"gentle", handsFree:false, pause:5000};
 const DATA_KEY = "nt_learning_v1";
 const PREFS_KEY = "nt_preferences_v1";
 let storageWarning = "";
+let recoveryRaw = null;
+let storageBlocked = false;
+let lastStored = null;
+let unsaved = false;
+const supportsWriteLock=typeof navigator!=="undefined"&&!!navigator.locks;
+let writeReady=!supportsWriteLock;
+let releaseWriteLock=null;
+let acquiringWriteLock=false;
 function readStored(key, fallback){
-  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
-  catch { storageWarning = "Saved data couldn't be read. Export a backup before clearing browser data."; return fallback; }
+  let raw=null;
+  try {
+    raw=localStorage.getItem(key);
+    if(key===DATA_KEY)lastStored=raw;
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    if(key===DATA_KEY){storageBlocked=true;recoveryRaw=raw;}
+    storageWarning="Saved data couldn't be read. Your original data is protected; download a recovery copy from the notebook.";
+    return fallback;
+  }
 }
 function safePrefs(value){
   return {speed:[0.75,0.9,1].includes(value?.speed)?value.speed:0.9, corrections:["gentle","immediate","recap"].includes(value?.corrections)?value.corrections:"gentle",handsFree:value?.handsFree===true,pause:[3000,5000,8000].includes(value?.pause)?value.pause:5000};
 }
 const prefs = safePrefs(readStored(PREFS_KEY, DEFAULT_PREFS));
 let data = readStored(DATA_KEY,{version:1,sessions:[],phrases:[],activeId:null});
-if(!validData(data)){storageWarning = "The saved learning format couldn't be read. The original browser data has not been changed."; data={version:1,sessions:[],phrases:[],activeId:null};}
+if(!validData(data)){storageBlocked=true;recoveryRaw=lastStored;storageWarning = "The saved learning format couldn't be read. The original browser data has not been changed."; data={version:1,sessions:[],phrases:[],activeId:null};}
+else data=normalizeData(data);
 let active = data.sessions.find(s => s.id === data.activeId) || null;
 let epoch = 0, busy = false, controller = null, retryJob = null, view = "practice";
 let recognition = null, listening = false, recognitionId = 0, silenceTimer = null, autoTimer = null;
@@ -29,9 +40,30 @@ let phraseOrigin = "";
 
 function id(){return crypto.randomUUID();}
 function notice(message){$("notice").textContent=message;$("notice").hidden=!message;}
+function saveStatus(message,error=false){
+  $("save-status").textContent=message;
+  $("save-status").classList.toggle("save-error",error);
+  $("export-recovery").hidden=recoveryRaw===null;
+}
 function save(){
-  try {localStorage.setItem(DATA_KEY,JSON.stringify(data));return true;}
-  catch {notice("Your latest work is still on this page, but this browser couldn't save it. Export a learning backup before closing the page.");return false;}
+  if(!writeReady&&!storageBlocked){unsaved=true;saveStatus("Waiting for this browser's save lock");return false;}
+  if(storageBlocked){
+    unsaved=true;saveStatus("Not saved · export a backup",true);
+    notice("Saving is paused to protect an existing copy. Export your current learning from the notebook before reloading. A recovery download is also available if an older copy was found.");
+    return false;
+  }
+  try {
+    // Compare immediately before writing. The storage event also stops writes when another tab saves.
+    const existing=localStorage.getItem(DATA_KEY);
+    if(existing!==lastStored){storageBlocked=true;recoveryRaw=existing;return save();}
+    const serialized=JSON.stringify(data);
+    if(serialized.length>4500000)throw new Error("Storage limit");
+    localStorage.setItem(DATA_KEY,serialized);lastStored=serialized;unsaved=false;
+    saveStatus("Saved in this browser · not yet synced");return true;
+  } catch {
+    unsaved=true;saveStatus("Not saved · export a backup",true);
+    notice("Your latest work is still on this page, but this browser couldn't save it. Export a learning backup before closing the page.");return false;
+  }
 }
 function getKey(){try{return localStorage.getItem("nt_key")||"";}catch{return "";}}
 function touch(){if(active)active.updatedAt=new Date().toISOString();save();}
@@ -71,7 +103,23 @@ function showView(next){
   if(next==="history")renderHistory();
   window.scrollTo({top:0});
 }
+function renderScenarios(){
+  const query=$("scenario-search").value.trim().toLocaleLowerCase();
+  const category=$("scenario-category").value||"all";
+  const all=Object.entries(SCENARIOS).filter(([key])=>key!=="free");
+  const matches=all.filter(([,s])=>(category==="all"||s.category===category)&&[s.title,s.goal,s.category].join(" ").toLocaleLowerCase().includes(query));
+  $("scenario-grid").replaceChildren();
+  for(const [key,s] of matches){
+    const card=button("",()=>startSession(key),"scenario"+(key==="cafe"?" featured":""));
+    const icon=el("span",{"Food & drink":"☕",Travel:"↗","Daily life":"⌂","People & leisure":"☀"}[s.category],"scenario-icon");icon.setAttribute("aria-hidden","true");
+    card.append(icon,el("span",s.category.toUpperCase()+" · BEGINNER","eyebrow"),el("strong",s.title),el("span",s.goal),el("span","Start practice →","scenario-link"));
+    $("scenario-grid").append(card);
+  }
+  $("scenario-count").textContent=`${matches.length} of ${all.length} guided situations · short, everyday conversations`;
+  $("scenario-empty").hidden=matches.length>0;
+}
 function startSession(scenario){
+  if(!Object.hasOwn(SCENARIOS,scenario))return;
   cancelWork();
   const config=SCENARIOS[scenario];
   const now=new Date().toISOString();
@@ -186,14 +234,16 @@ function startListening(){
 }
 
 function parseReply(raw,recap=false){
+  if(typeof raw!=="string"||raw.length>60000)throw new Error("The reply was too large. Please try again.");
   let value;
   try{value=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/, ""));}catch{throw new Error("The tutor's reply didn't arrive in a usable format. Please try again.");}
+  if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("The reply was incomplete. Please try again.");
   if(recap){
     const r=value.recap;
     if(!r||typeof r.good!=="string"||!r.good.trim()||typeof r.next!=="string"||!r.next.trim()||!Array.isArray(r.corrections)||r.corrections.length>4||!r.corrections.every(c=>c&&["original","better","why","english"].every(k=>typeof c[k]==="string")))throw new Error("The recap was incomplete. Please try again.");
     return {recap:{good:r.good,next:r.next,corrections:r.corrections.map(c=>({original:c.original,better:c.better,why:c.why,english:c.english}))}};
   }
-  if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>20||!value.parts.every(p=>p&&typeof p.t==="string"&&p.t.trim()&&["nb","en"].includes(p.lang)))throw new Error("The tutor's reply was incomplete. Please try again.");
+  if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>20||!value.parts.every(p=>p&&typeof p.t==="string"&&p.t.length<=5000&&p.t.trim()&&["nb","en"].includes(p.lang)))throw new Error("The tutor's reply was incomplete. Please try again.");
   return {parts:value.parts.map(p=>({t:p.t,lang:p.lang})),trans:typeof value.trans==="string"?value.trans:"",heard:typeof value.heard==="string"?value.heard:"",listen:value.listen==="en"?"en":"nb"};
 }
 function systemPrompt(job){
@@ -202,6 +252,8 @@ function systemPrompt(job){
 }
 async function runJob(job){
   if(busy||!active||active.completed)return;
+  if(!["message","hint","recap"].includes(job?.kind)||typeof job.text!=="string"||!job.text.trim()||job.text.length>2000){notice("Please send a message of 2,000 characters or fewer.");return;}
+  if(typeof navigator!=="undefined"&&navigator.onLine===false){notice("You appear to be offline. Your draft is kept; reconnect before sending.");return;}
   if(!getKey()){notice("Add your Claude API key in Settings to talk with the tutor. Your draft is kept.");openSettings();return;}
   stopRecognition();stopAudio();retryJob=null;warmSpeech();
   const current=epoch,sessionId=active.id;
@@ -279,20 +331,47 @@ function exportBackup(){
   const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}));const link=el("a");link.href=url;link.download=`norsk-tutor-backup-${new Date().toISOString().slice(0,10)}.json`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function validData(value){
-  const str=x=>typeof x==="string"&&x.length<=20000;
-  const parts=x=>Array.isArray(x)&&x.length<=20&&x.every(p=>p&&str(p.t)&&["nb","en"].includes(p.lang));
-  const message=m=>m&&((m.kind==="user"&&str(m.text)&&(!m.heard||str(m.heard)))||(["tutor","hint"].includes(m.kind)&&parts(m.parts)&&str(m.trans))||(m.kind==="recap"&&m.recap&&str(m.recap.good)&&str(m.recap.next)&&Array.isArray(m.recap.corrections)&&m.recap.corrections.length<=4&&m.recap.corrections.every(c=>c&&["original","better","why","english"].every(k=>str(c[k])))));
-  return value?.version===1&&Array.isArray(value.sessions)&&value.sessions.length<=1000&&Array.isArray(value.phrases)&&value.phrases.length<=5000&&value.sessions.every(s=>s&&str(s.id)&&Object.hasOwn(SCENARIOS,s.scenario)&&str(s.createdAt)&&Number.isFinite(Date.parse(s.createdAt))&&str(s.updatedAt)&&Number.isFinite(Date.parse(s.updatedAt))&&typeof s.completed==="boolean"&&str(s.draft)&&Array.isArray(s.messages)&&s.messages.length<=2000&&s.messages.every(message)&&Array.isArray(s.api)&&s.api.length<=2000&&s.api.every(m=>m&&["user","assistant"].includes(m.role)&&str(m.content)))&&value.phrases.every(p=>p&&str(p.id)&&str(p.nb)&&p.nb.trim()&&str(p.en)&&str(p.origin));
+  const str=(x,max=20000)=>typeof x==="string"&&x.length<=max;
+  const uuid=x=>typeof x==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
+  const date=x=>str(x,40)&&Number.isFinite(Date.parse(x));
+  const unique=xs=>new Set(xs.map(x=>x.id)).size===xs.length;
+  const parts=x=>Array.isArray(x)&&x.length>0&&x.length<=20&&x.every(p=>p&&str(p.t,5000)&&p.t.trim()&&["nb","en"].includes(p.lang));
+  const message=m=>m&&((m.kind==="user"&&str(m.text,2000)&&m.text.trim()&&(m.heard===undefined||str(m.heard,5000))&&(m.lang===undefined||["nb","en"].includes(m.lang)))||(["tutor","hint"].includes(m.kind)&&parts(m.parts)&&str(m.trans,5000))||(m.kind==="recap"&&m.recap&&str(m.recap.good,5000)&&str(m.recap.next,5000)&&Array.isArray(m.recap.corrections)&&m.recap.corrections.length<=4&&m.recap.corrections.every(c=>c&&["original","better","why","english"].every(k=>str(c[k],5000)))));
+  return value?.version===1&&Array.isArray(value.sessions)&&value.sessions.length<=1000&&Array.isArray(value.phrases)&&value.phrases.length<=5000&&
+    value.sessions.every(s=>s&&uuid(s.id)&&Object.hasOwn(SCENARIOS,s.scenario)&&date(s.createdAt)&&date(s.updatedAt)&&typeof s.completed==="boolean"&&str(s.draft,2000)&&
+      (s.hintLevel===undefined||Number.isInteger(s.hintLevel)&&s.hintLevel>=0&&s.hintLevel<=3)&&
+      (s.inputLanguage===undefined||["nb-NO","en-GB"].includes(s.inputLanguage))&&
+      Array.isArray(s.messages)&&s.messages.length<=2000&&s.messages.every(message)&&Array.isArray(s.api)&&s.api.length<=2000&&s.api.length%2===0&&s.api.every((m,i)=>m&&m.role===(i%2===0?"user":"assistant")&&str(m.content)))&&
+    value.phrases.every(p=>p&&uuid(p.id)&&str(p.nb,500)&&p.nb.trim()&&str(p.en,500)&&str(p.origin,200))&&unique(value.sessions)&&unique(value.phrases);
 }
-function sanitizeImport(value){
-  // Strip all unknown fields before merging, including anything named like a key.
-  return {version:1,activeId:null,phrases:value.phrases.map(p=>({id:p.id,nb:p.nb,en:p.en,origin:p.origin})),sessions:value.sessions.map(s=>({id:s.id,scenario:s.scenario,createdAt:s.createdAt,updatedAt:s.updatedAt,completed:s.completed,draft:s.draft,hintLevel:0,inputLanguage:s.inputLanguage==="en-GB"?"en-GB":"nb-NO",api:s.api.map(m=>({role:m.role,content:m.content})),messages:s.messages.map(m=>m.kind==="user"?{kind:"user",text:m.text,heard:m.heard||"",lang:m.lang==="en"?"en":"nb"}:m.kind==="recap"?{kind:"recap",...parseReply(JSON.stringify({recap:m.recap}),true)}:{kind:m.kind,...parseReply(JSON.stringify(m))})}))};
+function normalizeData(value){
+  // Strip all unknown fields, including imported objects named like credentials.
+  return {version:1,activeId:value.sessions.some(s=>s.id===value.activeId)?value.activeId:null,
+    phrases:value.phrases.map(p=>({id:p.id,nb:p.nb,en:p.en,origin:p.origin})),
+    sessions:value.sessions.map(s=>({id:s.id,scenario:s.scenario,createdAt:s.createdAt,updatedAt:s.updatedAt,completed:s.completed,draft:s.draft,hintLevel:s.hintLevel||0,inputLanguage:s.inputLanguage==="en-GB"?"en-GB":"nb-NO",
+      api:s.api.map(m=>({role:m.role,content:m.content})),messages:s.messages.map(m=>m.kind==="user"?{kind:"user",text:m.text,heard:m.heard||"",lang:m.lang==="en"?"en":"nb"}:m.kind==="recap"?{kind:"recap",recap:{good:m.recap.good,next:m.recap.next,corrections:m.recap.corrections.map(c=>({original:c.original,better:c.better,why:c.why,english:c.english}))}}:{kind:m.kind,parts:m.parts.map(p=>({t:p.t,lang:p.lang})),trans:m.trans,heard:typeof m.heard==="string"?m.heard.slice(0,5000):"",listen:m.listen==="en"?"en":"nb"})}))};
+}
+function sanitizeImport(value){return normalizeData({...value,activeId:null});}
+function importLearning(parsed){
+  if(!validData(parsed))throw new Error("Invalid backup");
+  const imported=sanitizeImport(parsed);
+  const candidate={...data,sessions:[...data.sessions],phrases:[...data.phrases]};
+  for(const s of imported.sessions)if(!candidate.sessions.some(old=>old.id===s.id))candidate.sessions.push(s);
+  for(const p of imported.phrases)if(!candidate.phrases.some(old=>old.id===p.id||old.nb.toLocaleLowerCase()===p.nb.toLocaleLowerCase()))candidate.phrases.push(p);
+  if(!validData(candidate)||JSON.stringify(candidate).length>4500000)throw new Error("Backup exceeds storage limit");
+  data=candidate;return save();
+}
+function downloadRecovery(){
+  if(recoveryRaw===null)return;
+  const url=URL.createObjectURL(new Blob([recoveryRaw],{type:"application/json"}));
+  const link=el("a");link.href=url;link.download="norsk-tutor-recovery.json";document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 // UI bindings. No inline HTML or user-provided markup is rendered.
 document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",()=>showView(b.dataset.view)));
 document.querySelector(".brand").addEventListener("click",e=>{e.preventDefault();showView("practice");});
-document.querySelectorAll("[data-scenario]").forEach(b=>b.addEventListener("click",()=>startSession(b.dataset.scenario)));
+$("scenario-search").addEventListener("input",renderScenarios);
+$("scenario-category").addEventListener("change",renderScenarios);
 document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>$(b.dataset.close).close()));
 $("free-chat").addEventListener("click",()=>startSession("free"));
 $("new-session").addEventListener("click",newSession);$("another-session").addEventListener("click",newSession);
@@ -316,14 +395,37 @@ $("settings-form").addEventListener("submit",e=>{
 $("settings-dialog").addEventListener("close",()=>{$("api-key").value="";});
 $("forget-key").addEventListener("click",()=>{try{localStorage.removeItem("nt_key");$("api-key").value="";$("api-key").placeholder="sk-ant-…";$("connection-status").textContent="API key removed from this browser. Your learning is still saved.";}catch{$("settings-error").textContent="Couldn't remove the saved key. Check browser storage permissions.";}});
 $("export-data").addEventListener("click",exportBackup);
+$("export-recovery").addEventListener("click",downloadRecovery);
 $("import-data").addEventListener("change",async e=>{
   const file=e.target.files[0];if(!file)return;
-  try{if(file.size>5000000)throw new Error();const parsed=JSON.parse(await file.text());if(!validData(parsed))throw new Error();const imported=sanitizeImport(parsed);
-    for(const s of imported.sessions)if(!data.sessions.some(old=>old.id===s.id))data.sessions.push(s);
-    for(const p of imported.phrases)if(!data.phrases.some(old=>old.id===p.id||old.nb.toLocaleLowerCase()===p.nb.toLocaleLowerCase()))data.phrases.push(p);
-    const saved=save();renderNotebook();renderHistory();if(saved)notice("Backup imported. Existing sessions and phrases were kept.");
+  try{if(file.size>5000000)throw new Error();const parsed=JSON.parse(await file.text());
+    const saved=importLearning(parsed);renderNotebook();renderHistory();if(saved)notice("Backup imported. Existing sessions and phrases were kept.");
   }catch{notice("That file isn't a valid Norsk Tutor backup, or is larger than 5 MB. Your existing learning has not been changed.");}finally{e.target.value="";}
 });
 document.addEventListener("visibilitychange",()=>{if(document.hidden){stopRecognition();stopAudio();}});
 window.addEventListener("pagehide",()=>{stopRecognition();stopAudio();controller?.abort();});
-renderLesson();renderNotebook();if(storageWarning)notice(storageWarning);
+async function acquireWriteLock(){
+  if(!supportsWriteLock||acquiringWriteLock||writeReady)return;
+  acquiringWriteLock=true;
+  try{
+    await navigator.locks.request("norsk-tutor-learning-writer",{ifAvailable:true},async lock=>{
+      if(!lock){storageBlocked=true;saveStatus("Open in another tab · saving paused",true);notice("Another tab is using this app. Close that tab and reload this one before practising. You can still export your learning here.");return;}
+      writeReady=true;
+      if(unsaved)save();
+      await new Promise(resolve=>{releaseWriteLock=resolve;});
+      releaseWriteLock=null;writeReady=false;
+    });
+  }catch{storageBlocked=true;saveStatus("Couldn't protect local saving · export a backup",true);}
+  finally{acquiringWriteLock=false;}
+}
+window.addEventListener("pagehide",()=>releaseWriteLock?.());
+window.addEventListener("pageshow",()=>acquireWriteLock());
+window.addEventListener("storage",event=>{
+  if(event.key!==DATA_KEY&&event.key!==null)return;
+  storageBlocked=true;recoveryRaw=event.newValue;cancelWork();saveStatus("Another tab changed the saved copy",true);
+  notice("Another tab changed or cleared your learning. Export any work from this tab before reloading so neither copy is lost.");
+});
+window.addEventListener("beforeunload",event=>{if(unsaved){event.preventDefault();event.returnValue="";}});
+renderScenarios();renderLesson();renderNotebook();saveStatus(storageBlocked?"Saved data needs recovery":"Saved in this browser · not yet synced",storageBlocked);if(storageWarning)notice(storageWarning);
+
+acquireWriteLock();
