@@ -5,7 +5,7 @@ const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'dist');
 fs.rmSync(output, { recursive: true, force: true });
 fs.mkdirSync(output, { recursive: true });
-for (const name of ['index.html', 'app.js', 'styles.css', 'scenarios.js', 'tutor-prompt.js', '_headers']) {
+for (const name of ['index.html', 'app.js', 'learning.js', 'sync.js', 'styles.css', 'scenarios.js', 'tutor-prompt.js', '_headers']) {
   fs.copyFileSync(path.join(root, name), path.join(output, name));
 }
-console.log('Prepared six app files for publication.');
+console.log('Prepared eight app files for publication.');

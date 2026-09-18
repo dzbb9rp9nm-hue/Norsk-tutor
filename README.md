@@ -1,5 +1,7 @@
 # Norsk Tutor
 
+> **18 September local update:** Account sign-in, server tutor access, offline pending saves and conflict handling are now implemented locally, but are not published or activated. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration, verification and limitations. Earlier live-release notes below describe the deployed version.
+
 A personal Norwegian Bokmål practice app for a beginner. Hosted as static files on Netlify, connected to the `main` branch of the GitHub repository.
 
 ## This release

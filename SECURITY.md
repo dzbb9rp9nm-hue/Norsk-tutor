@@ -1,5 +1,7 @@
 # Security and resilience
 
+> **18 September local update:** Account sign-in, server tutor access, offline pending saves and conflict handling are now implemented locally, but are not published or activated. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration, verification and limitations. Earlier live-release notes below describe the deployed version.
+
 ## Implemented in the security/scenario release
 
 - Strict Netlify Content Security Policy: only local scripts/styles; only the app and Anthropic may receive fetch requests. No inline scripts, eval, plugins, external frames, or form submissions. Frame embedding is blocked, with anti-sniffing, no-referrer, HTTPS and restricted browser-permission headers.

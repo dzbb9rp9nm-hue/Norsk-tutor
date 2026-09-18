@@ -16,3 +16,5 @@ Return ONLY valid JSON, no markdown:
 Every part must have nonempty t and lang nb or en. heard should reflect what the learner actually wrote, including errors, and mark uncertain guesses with (?). Use an empty heard string for English messages and app control messages. listen indicates the language the learner is likely to speak next, nb or en.
 
 If the current session requests a different JSON shape for a recap, use that shape instead.`;
+
+if(typeof module!=="undefined")module.exports=SYSTEM_PROMPT;

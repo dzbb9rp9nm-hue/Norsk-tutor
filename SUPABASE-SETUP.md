@@ -1,5 +1,7 @@
 # Supabase setup — current checkpoint
 
+> **18 September local update:** Account sign-in, server tutor access, offline pending saves and conflict handling are now implemented locally, but are not published or activated. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration, verification and limitations. Earlier live-release notes below describe the deployed version.
+
 ## Verified on 13 September 2026
 
 - Project URL: https://ncppqobinbmpdcwjjoen.supabase.co
@@ -35,3 +37,9 @@ Current source: https://supabase.com/pricing and https://supabase.com/docs/guide
 Supabase's built-in sender only delivers to project-team email addresses and is currently limited to two messages per hour. It is intended for testing. Configure a production SMTP provider before relying on email sign-in for wider use. Do not enable public signup to address delivery errors.
 
 Source: https://supabase.com/docs/guides/auth/auth-smtp
+
+## Activation progress — 18 September 2026
+
+- Owner checked `claim_tutor_request`: absent before installation.
+- Owner ran `database/002_tutor_limits.sql` and reported “Success. No rows returned.” Do not rerun this migration.
+- Next: use **Send password recovery** for the existing user to set a Norsk Tutor password; then hosting configuration and live verification.

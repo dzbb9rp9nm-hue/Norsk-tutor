@@ -19,9 +19,20 @@ test('database setup enforces owner isolation, validated writes and revision con
       grant execute on function auth.uid() to authenticated,anon;`);
     await db.query('insert into auth.users(id) values ($1),($2)',[ownerA,ownerB]);
     await db.exec(fs.readFileSync('database/001_learning.sql','utf8'));
+    await db.exec(fs.readFileSync('database/002_tutor_limits.sql','utf8'));
     const asUser=async uid=>{await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[uid]);await db.exec('set role authenticated');};
     const save=async(body,revision=0,deleted=false,kind='phrase')=>(await db.query('select public.save_learning_record($1,$2,$3::jsonb,$4,$5) as result',[record,kind,JSON.stringify(body),revision,deleted])).rows[0].result;
     const body={id:record,nb:'Hei!',en:'Hi!',origin:'Test'};
+    await asUser(ownerA);
+    assert.equal((await db.query('select public.claim_tutor_request() as allowed')).rows[0].allowed,true);
+    assert.equal((await db.query('select public.claim_tutor_request() as allowed')).rows[0].allowed,false);
+    await assert.rejects(db.query('select * from public.tutor_usage'),/permission denied/);
+    await db.exec('reset role');
+    await db.query("update public.tutor_usage set requests=150,last_request=now()-interval '10 seconds' where owner_id=$1",[ownerA]);
+    await asUser(ownerA);
+    assert.equal((await db.query('select public.claim_tutor_request() as allowed')).rows[0].allowed,false);
+    await asUser(ownerB);
+    assert.equal((await db.query('select public.claim_tutor_request() as allowed')).rows[0].allowed,true);
     await asUser(ownerA);
     let r=await save(body);assert.equal(r.saved,true);assert.equal(r.record.owner_id,ownerA);assert.equal(r.record.revision,1);
     assert.equal((await db.query('select * from public.learning_records')).rows.length,1);
@@ -41,6 +52,7 @@ test('database setup enforces owner isolation, validated writes and revision con
     assert.equal((await db.query('select * from public.learning_records')).rows[0].body.nb,'God dag!');
     r=await save({},2,true);assert.equal(r.saved,true);assert.equal(r.record.deleted,true);assert.deepEqual(r.record.body,{});
     r=await save(body,2);assert.equal(r.conflict,true); // Stale device cannot resurrect a deletion.
+    r=await save(body,3);assert.equal(r.saved,true);assert.equal(r.record.revision,4);assert.equal(r.record.body.nb,body.nb); // Explicit backup restoration against the acknowledged tombstone.
     await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub','',false)");await db.exec('set role authenticated');
     await assert.rejects(save(body),/Sign-in required/);
     await db.exec('reset role; set role anon');

@@ -4,7 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#174c42">
 <meta name="description" content="Your patient Norwegian conversation partner. Practise everyday situations and save useful phrases at your own pace.">
 <title>Norsk Tutor · A little Norwegian, every day</title>
-<link rel="stylesheet" href="styles.css"><script src="scenarios.js" defer></script><script src="tutor-prompt.js" defer></script><script src="app.js" defer></script>
+<link rel="stylesheet" href="styles.css"><script src="scenarios.js" defer></script><script src="tutor-prompt.js" defer></script><script src="learning.js" defer></script><script src="sync.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to practice</a>
@@ -17,6 +17,7 @@
 <button class="nav-button" data-view="history"><span aria-hidden="true">↶</span> Saved sessions</button>
 </nav>
 <div class="sidebar-note"><span class="eyebrow">YOUR PACE IS THE RIGHT PACE</span><p>A pause is part of learning.<br>Take all the time you need.</p></div>
+<button id="account-button" class="settings-button">Account &amp; saving</button>
 <button id="settings-button" class="settings-button">Settings &amp; connection</button><p id="save-status" class="local-note" role="status">Learning saved in this browser.</p>
 </aside>
 <main id="main" tabindex="-1">
@@ -46,7 +47,7 @@
 <div class="composer-actions"><div class="input-actions"><button id="mic-button" class="mic-button" aria-label="Start microphone">● <span>Speak</span></button><button id="send-button" class="primary">Send <span aria-hidden="true">↑</span></button></div><label class="language-label">Listening in <select id="input-language" aria-label="Microphone language"><option value="nb-NO">Norwegian</option><option value="en-GB">English</option></select></label></div>
 <p id="status" class="status" role="status">Take your time. You can edit your words before sending.</p>
 </div>
-<div id="finished-actions" class="finished-actions" hidden><p>This recap is saved in this browser.</p><button id="another-session" class="primary">Choose another practice</button></div>
+<div id="finished-actions" class="finished-actions" hidden><p>Your recap is saved. Check the saving status for its online copy.</p><button id="another-session" class="primary">Choose another practice</button></div>
 </section>
 </section>
 <section id="notebook-view" hidden aria-label="Phrase notebook"><p class="section-intro">Useful words from your conversations, ready to hear again.</p><div class="section-actions"><button id="add-phrase" class="primary">Add a phrase</button><button id="export-data" class="subtle">Export learning backup</button><button id="export-recovery" class="subtle" hidden>Download recovery copy</button><label class="subtle import-label">Import backup<input id="import-data" type="file" accept="application/json,.json" class="sr-only"></label></div><div id="phrase-list" class="saved-list"></div></section>
@@ -58,9 +59,18 @@
 <label for="correction-style">Corrections</label><select id="correction-style"><option value="gentle">Gently model the right words</option><option value="immediate">Explain mistakes as we go</option><option value="recap">Save corrections for the recap</option></select>
 <label class="check-label"><input id="hands-free" type="checkbox"> Hands-free conversation</label><p class="field-note">Sends recognised words automatically after a pause, then listens after the tutor replies. Turn off to edit before sending.</p>
 <label for="thinking-time">Pause before sending in hands-free mode</label><select id="thinking-time"><option value="3000">3 seconds</option><option value="5000">5 seconds</option><option value="8000">8 seconds</option></select>
-<hr><label for="api-key">Claude API key</label><input id="api-key" type="password" autocomplete="off" placeholder="sk-ant-…"><p class="field-note">Stored in this browser and sent to Anthropic with your conversation. Your key is excluded from learning backups. <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">Get a key</a>.</p>
+<div id="browser-key-settings"><hr><label for="api-key">Claude API key</label><input id="api-key" type="password" autocomplete="off" placeholder="sk-ant-…"><p class="field-note">Stored in this browser and sent to Anthropic with your conversation. Your key is excluded from learning backups. <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">Get a key</a>.</p></div>
 <p id="connection-status" class="field-note"></p><p id="settings-error" class="error" role="alert"></p><div class="dialog-actions"><button type="button" id="forget-key" class="subtle">Forget key</button><button type="submit" class="primary">Save preferences</button></div>
 </form></dialog>
 <dialog id="phrase-dialog"><form id="phrase-form"><div class="dialog-heading"><h2>Save a useful phrase</h2><button type="button" class="icon-button" data-close="phrase-dialog" aria-label="Close phrase form">×</button></div><label for="phrase-nb">Norwegian</label><input id="phrase-nb" required maxlength="500"><label for="phrase-en">English meaning</label><input id="phrase-en" maxlength="500"><div class="dialog-actions"><button type="submit" class="primary">Save phrase</button></div></form></dialog>
+<dialog id="account-dialog" aria-labelledby="account-title">
+<div class="dialog-heading"><h2 id="account-title">Your learning, anywhere.</h2><button type="button" class="icon-button" data-close="account-dialog" aria-label="Close account settings">×</button></div>
+<p id="account-status" role="status">Checking account connection…</p>
+<form id="sign-in-form"><label for="account-email">Email address</label><input id="account-email" type="email" autocomplete="email" required maxlength="254"><label for="account-password">Norsk Tutor password</label><input id="account-password" type="password" autocomplete="current-password" required minlength="8" maxlength="256"><button class="primary" type="submit">Sign in</button></form>
+<p class="field-note"><button id="password-help" type="button" class="subtle">I need to set or reset my password</button></p>
+<div id="signed-in-actions" hidden><p>Your account learning is separate from this browser's original learning. Pending saves stay on this device until syncing succeeds. Preferences stay on this device.</p><div class="section-actions"><button id="sync-now" class="primary">Sync now</button><button id="migrate-browser" class="subtle">Copy browser learning to my account</button><button id="account-backup" class="subtle">Export account backup</button><button id="sign-out" class="subtle">Sign out</button></div></div>
+<div id="cloud-conflicts"></div><p id="account-error" class="error" role="alert"></p>
+</dialog>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button id="confirm-cancel" class="subtle" type="button">Cancel</button><button id="confirm-yes" class="primary" type="button">Continue</button></div></dialog>
 </body>
 </html>

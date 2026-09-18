@@ -10,8 +10,8 @@ function app(stored={}){
  const elements=new Map(),store=new Map(Object.entries(stored));const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
  const timers=new Map();let timerId=0;const spoken=[];let latestRecognition;
  class Recognition {constructor(){latestRecognition=this}start(){}stop(){this.onend?.()}abort(){this.onend?.()}}
- const context=vm.createContext({console,crypto:webcrypto,AbortController,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
- vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,get state(){return {active,data,busy,retryJob,prefs}}, get recognition(){return recognition}};',context);
+ const context=vm.createContext({console,crypto:webcrypto,AbortController,AbortSignal,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
+ vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
  return {context,api:context.testing,get,store,timers,spoken,recognition:()=>latestRecognition};
 }
 const reply={parts:[{t:'Vil du ha melk?',lang:'nb'}],trans:'Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
@@ -110,4 +110,36 @@ test('null and oversized model replies fail safely without rendering raw output'
 });
 test('offline sends and oversized inputs never contact the tutor',async()=>{
  const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');draft(a);a.context.navigator={onLine:false};await a.api.runJob(job);assert.equal(a.api.state.active.messages.length,1);assert.equal(a.api.state.active.draft,job.text);a.context.navigator.onLine=true;await a.api.runJob({...job,text:'x'.repeat(2001)});assert.equal(a.api.state.active.messages.length,1);
+});
+
+const ownerA={id:'11111111-1111-4111-8111-111111111111',email:'a@example.test'};
+const ownerB={id:'22222222-2222-4222-8222-222222222222',email:'b@example.test'};
+const cloudPhrase={record_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',kind:'phrase',revision:1,deleted:false,body:{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',nb:'Hei',en:'Hi',origin:'Test'}};
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+function cloudTransport(a,handler){a.context.fetch=async(url,options)=>({ok:true,json:async()=>handler(url.split('/').pop(),JSON.parse(options.body))});}
+test('sign-in opens a separate workspace without automatically migrating browser learning',async()=>{
+ const a=app();a.api.startSession('cafe');const original=a.store.get('nt_learning_v1');cloudTransport(a,()=>({records:[cloudPhrase],more:false}));a.api.enterAccount(ownerA,true);await tick();
+ assert.equal(a.api.state.data.sessions.length,0);assert.equal(a.api.state.data.phrases[0].nb,'Hei');assert.equal(a.store.get('nt_learning_v1'),original);assert.equal(a.get('save-status').textContent,'Saved online and on this device');
+});
+test('late sync responses cannot enter another account workspace',async()=>{
+ const a=app();let resolve;a.context.fetch=()=>new Promise(r=>resolve=r);a.api.enterAccount(ownerA,true);const finishA=resolve;
+ cloudTransport(a,()=>({records:[],more:false}));a.api.enterAccount(ownerB,true);await tick();finishA({ok:true,json:async()=>({records:[cloudPhrase],more:false})});await tick();
+ assert.equal(a.api.state.account.id,ownerB.id);assert.equal(a.api.state.data.phrases.length,0);
+});
+test('edits during an online save keep their draft and remain pending',async()=>{
+ const a=app();cloudTransport(a,()=>({records:[],more:false}));a.api.enterAccount(ownerA,true);await tick();a.api.startSession('cafe');draft(a,'first');let resolve,sent;
+ a.context.fetch=async(url,options)=>{const body=JSON.parse(options.body);if(url.endsWith('/records'))return {ok:true,json:async()=>({records:[],more:false})};sent=body.record;return new Promise(r=>resolve=r);};
+ const pending=a.api.syncAccount();await tick();draft(a,'second');resolve({ok:true,json:async()=>({saved:true,record:{...sent,revision:1}})});await pending;
+ assert.equal(a.api.state.active.draft,'second');assert.equal(a.api.state.data.sessions[0].draft,'second');assert.equal(a.api.state.cloudBase[sent.record_id].body.draft,'first');assert.match(a.get('save-status').textContent,/more changes waiting/);
+});
+test('expired account sync keeps pending learning and pauses until sign-in',async()=>{
+ const a=app();cloudTransport(a,()=>({records:[],more:false}));a.api.enterAccount(ownerA,true);await tick();a.api.startSession('cafe');draft(a,'keep me');a.context.fetch=async()=>({ok:false,status:401,json:async()=>({error:'Sign in again'})});await a.api.syncAccount();
+ assert.equal(a.api.state.cloudPaused,true);assert.equal(a.api.state.active.draft,'keep me');assert.match(a.store.get('nt_account_v1_'+ownerA.id),/keep me/);assert.match(a.get('save-status').textContent,/sync pending/);
+});
+test('a conflict arriving during a tutor request does not detach the active session',async()=>{
+ const a=app();cloudTransport(a,()=>({records:[],more:false}));a.api.enterAccount(ownerA,true);await tick();a.api.startSession('cafe');draft(a,'Hei');let finishSave,finishTutor,sent;
+ a.context.fetch=async(url,options)=>{if(url.endsWith('/records'))return {ok:true,json:async()=>({records:[],more:false})};if(url.endsWith('/save')){sent=JSON.parse(options.body).record;return new Promise(r=>finishSave=r);}return new Promise(r=>finishTutor=r);};
+ const sync=a.api.syncAccount();await tick();const tutor=a.api.runJob(job);const remote={...sent,revision:1,body:{...sent.body,draft:'Other device'}};
+ finishSave({ok:true,json:async()=>({conflict:true,record:remote})});await sync;finishTutor(response());await tutor;
+ assert.equal(a.api.state.active,a.api.state.data.sessions[0]);assert.equal(a.api.state.data.sessions[0].messages.length,3);assert.equal(a.api.state.cloudConflicts.length,1);
 });

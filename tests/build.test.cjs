@@ -5,7 +5,7 @@ const {execFileSync}=require('node:child_process');
 
 test('publish output contains only the allowed app assets, with their exact source contents',()=>{
   execFileSync(process.execPath,['scripts/build.cjs']);
-  const expected=['_headers','app.js','index.html','scenarios.js','styles.css','tutor-prompt.js'];
+  const expected=['_headers','app.js', 'learning.js', 'sync.js','index.html','scenarios.js','styles.css','tutor-prompt.js'];
   assert.deepEqual(fs.readdirSync('dist').sort(),expected.sort());
   for(const file of expected)assert.equal(fs.readFileSync('dist/'+file,'utf8'),fs.readFileSync(file,'utf8'));
 });

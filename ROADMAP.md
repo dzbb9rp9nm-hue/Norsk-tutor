@@ -1,5 +1,7 @@
 # Product roadmap
 
+> **18 September local update:** Account sign-in, server tutor access, offline pending saves and conflict handling are now implemented locally, but are not published or activated. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration, verification and limitations. Earlier live-release notes below describe the deployed version.
+
 The user approved a broader set of recommendations. This implementation delivers the proposed first release, plus the phrase notebook and backups. Remaining work is recorded here so it is not mistaken for completed functionality.
 
 ## Implemented first release

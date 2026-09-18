@@ -473,3 +473,5 @@ Object.assign(SCENARIOS, {
 SCENARIOS.cafe.category = "Food & drink";
 SCENARIOS.introductions.category = "People & leisure";
 SCENARIOS.shop.category = "Daily life";
+
+if(typeof module!=="undefined")module.exports=SCENARIOS;

@@ -2,7 +2,9 @@
 
 const $ = id => document.getElementById(id);
 const DEFAULT_PREFS = {speed:0.9, corrections:"gentle", handsFree:false, pause:5000};
-const DATA_KEY = "nt_learning_v1";
+let DATA_KEY = "nt_learning_v1";
+let account=null,cloudBase={},cloudBusy=false,cloudTimer=null,cloudEpoch=0,cloudPaused=false,cloudConflicts=[];
+let accountEnabled=false,accountTutor=false;
 const PREFS_KEY = "nt_preferences_v1";
 let storageWarning = "";
 let recoveryRaw = null;
@@ -56,10 +58,12 @@ function save(){
     // Compare immediately before writing. The storage event also stops writes when another tab saves.
     const existing=localStorage.getItem(DATA_KEY);
     if(existing!==lastStored){storageBlocked=true;recoveryRaw=existing;return save();}
-    const serialized=JSON.stringify(data);
+    const serialized=JSON.stringify(account?{learning:data,base:cloudBase}:data);
     if(serialized.length>4500000)throw new Error("Storage limit");
     localStorage.setItem(DATA_KEY,serialized);lastStored=serialized;unsaved=false;
-    saveStatus("Saved in this browser · not yet synced");return true;
+    saveStatus(account?"Saved on this device · waiting to sync":"Saved in this browser · not yet synced");
+    if(account&&!cloudPaused){clearTimeout(cloudTimer);cloudTimer=setTimeout(syncAccount,1500);}
+    return true;
   } catch {
     unsaved=true;saveStatus("Not saved · export a backup",true);
     notice("Your latest work is still on this page, but this browser couldn't save it. Export a learning backup before closing the page.");return false;
@@ -254,7 +258,7 @@ async function runJob(job){
   if(busy||!active||active.completed)return;
   if(!["message","hint","recap"].includes(job?.kind)||typeof job.text!=="string"||!job.text.trim()||job.text.length>2000){notice("Please send a message of 2,000 characters or fewer.");return;}
   if(typeof navigator!=="undefined"&&navigator.onLine===false){notice("You appear to be offline. Your draft is kept; reconnect before sending.");return;}
-  if(!getKey()){notice("Add your Claude API key in Settings to talk with the tutor. Your draft is kept.");openSettings();return;}
+  if(!account&&!getKey()){notice("Add your Claude API key in Settings to talk with the tutor. Your draft is kept.");openSettings();return;}
   stopRecognition();stopAudio();retryJob=null;warmSpeech();
   const current=epoch,sessionId=active.id;
   controller=new AbortController();const request=controller;busy=true;controls();
@@ -263,9 +267,9 @@ async function runJob(job){
   const alive=()=>current===epoch&&active?.id===sessionId;
   try{
     const body={model:"claude-haiku-4-5",max_tokens:job.kind==="recap"?1400:850,system:systemPrompt(job),messages:[...active.api.slice(-40),{role:"user",content:job.text}]};
-    const response=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
+    const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,messages:active.api.slice(-40)}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
     if(!alive())return;
-    if(!response.ok)throw new Error(response.status===401?"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
+    if(!response.ok)throw new Error(response.status===401?account?"Your sign-in expired. Sign in again from Account & saving. Your draft is kept.":"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
     const payload=await response.json();
     if(!alive())return;
     if(payload.stop_reason==="max_tokens")throw new Error("The reply was cut short. Please try again.");
@@ -307,7 +311,7 @@ function renderNotebook(){
   for(const phrase of [...data.phrases].reverse()){
     const card=el("article",undefined,"saved-card");const title=el("h3",phrase.nb);title.lang="nb";card.append(title,el("p",phrase.en));
     if(phrase.origin)card.append(el("span",phrase.origin,"eyebrow"));
-    const actions=el("div",undefined,"message-actions");actions.append(button("Listen",()=>speakParts([{t:phrase.nb,lang:"nb"}]),""),button("Slower",()=>speakParts([{t:phrase.nb,lang:"nb"}],null,.65),""));card.append(actions);list.append(card);
+    const actions=el("div",undefined,"message-actions");actions.append(button("Listen",()=>speakParts([{t:phrase.nb,lang:"nb"}]),""),button("Slower",()=>speakParts([{t:phrase.nb,lang:"nb"}],null,.65),""));actions.append(button("Delete",()=>deleteLearning("phrase",phrase.id),""));card.append(actions);list.append(card);
   }
 }
 function renderHistory(){
@@ -316,40 +320,20 @@ function renderHistory(){
   for(const session of [...data.sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))){
     const card=el("article",undefined,"saved-card"),count=session.messages.filter(m=>m.kind==="user").length;
     card.append(el("h3",SCENARIOS[session.scenario].title),el("p",`${new Date(session.updatedAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})} · ${count} ${count===1?"reply":"replies"} · ${session.completed?"Recap saved":"Ready to continue"}`));
-    card.append(button(session.completed?"Read session & recap":"Continue session",()=>{cancelWork();active=session;data.activeId=session.id;save();renderLesson();showView("practice");}));list.append(card);
+    card.append(button(session.completed?"Read session & recap":"Continue session",()=>{cancelWork();active=session;data.activeId=session.id;save();renderLesson();showView("practice");}));card.append(button("Delete",()=>deleteLearning("session",session.id)));list.append(card);
   }
 }
 function openSettings(){
+  $("browser-key-settings").hidden=!!account;$("forget-key").hidden=!!account&&!getKey();
   stopRecognition();stopAudio();$("speech-speed").value=String(prefs.speed);$("correction-style").value=prefs.corrections;$("hands-free").checked=prefs.handsFree;$("thinking-time").value=String(prefs.pause);$("api-key").value="";$("api-key").placeholder=getKey()?"Key saved · enter a new one to replace it":"sk-ant-…";$("settings-error").textContent="";
   const hasMic=!!(window.SpeechRecognition||window.webkitSpeechRecognition),hasVoice=!!window.speechSynthesis?.getVoices().some(v=>/^(nb|no)/i.test(v.lang));
-  $("connection-status").textContent=`${getKey()?"API key saved (not tested).":"No API key saved yet."} ${hasMic?"Speech recognition is available; microphone permission is checked when you speak.":"Speech recognition isn't available here. Typing still works."} ${hasVoice?"Norwegian playback voice found.":"No Norwegian voice detected yet; available voices depend on your device."}`;
+  $("connection-status").textContent=`${account?"Using your account tutor connection.":getKey()?"API key saved (not tested).":"No API key saved yet."} ${hasMic?"Speech recognition is available; microphone permission is checked when you speak.":"Speech recognition isn't available here. Typing still works."} ${hasVoice?"Norwegian playback voice found.":"No Norwegian voice detected yet; available voices depend on your device."}`;
   $("settings-dialog").showModal();
 }
 function exportBackup(){
   // Build an explicit allowlist. Preferences and credentials are never exported.
   const backup={version:1,sessions:data.sessions,phrases:data.phrases,activeId:data.activeId};
   const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}));const link=el("a");link.href=url;link.download=`norsk-tutor-backup-${new Date().toISOString().slice(0,10)}.json`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
-function validData(value){
-  const str=(x,max=20000)=>typeof x==="string"&&x.length<=max;
-  const uuid=x=>typeof x==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
-  const date=x=>str(x,40)&&Number.isFinite(Date.parse(x));
-  const unique=xs=>new Set(xs.map(x=>x.id)).size===xs.length;
-  const parts=x=>Array.isArray(x)&&x.length>0&&x.length<=20&&x.every(p=>p&&str(p.t,5000)&&p.t.trim()&&["nb","en"].includes(p.lang));
-  const message=m=>m&&((m.kind==="user"&&str(m.text,2000)&&m.text.trim()&&(m.heard===undefined||str(m.heard,5000))&&(m.lang===undefined||["nb","en"].includes(m.lang)))||(["tutor","hint"].includes(m.kind)&&parts(m.parts)&&str(m.trans,5000))||(m.kind==="recap"&&m.recap&&str(m.recap.good,5000)&&str(m.recap.next,5000)&&Array.isArray(m.recap.corrections)&&m.recap.corrections.length<=4&&m.recap.corrections.every(c=>c&&["original","better","why","english"].every(k=>str(c[k],5000)))));
-  return value?.version===1&&Array.isArray(value.sessions)&&value.sessions.length<=1000&&Array.isArray(value.phrases)&&value.phrases.length<=5000&&
-    value.sessions.every(s=>s&&uuid(s.id)&&Object.hasOwn(SCENARIOS,s.scenario)&&date(s.createdAt)&&date(s.updatedAt)&&typeof s.completed==="boolean"&&str(s.draft,2000)&&
-      (s.hintLevel===undefined||Number.isInteger(s.hintLevel)&&s.hintLevel>=0&&s.hintLevel<=3)&&
-      (s.inputLanguage===undefined||["nb-NO","en-GB"].includes(s.inputLanguage))&&
-      Array.isArray(s.messages)&&s.messages.length<=2000&&s.messages.every(message)&&Array.isArray(s.api)&&s.api.length<=2000&&s.api.length%2===0&&s.api.every((m,i)=>m&&m.role===(i%2===0?"user":"assistant")&&str(m.content)))&&
-    value.phrases.every(p=>p&&uuid(p.id)&&str(p.nb,500)&&p.nb.trim()&&str(p.en,500)&&str(p.origin,200))&&unique(value.sessions)&&unique(value.phrases);
-}
-function normalizeData(value){
-  // Strip all unknown fields, including imported objects named like credentials.
-  return {version:1,activeId:value.sessions.some(s=>s.id===value.activeId)?value.activeId:null,
-    phrases:value.phrases.map(p=>({id:p.id,nb:p.nb,en:p.en,origin:p.origin})),
-    sessions:value.sessions.map(s=>({id:s.id,scenario:s.scenario,createdAt:s.createdAt,updatedAt:s.updatedAt,completed:s.completed,draft:s.draft,hintLevel:s.hintLevel||0,inputLanguage:s.inputLanguage==="en-GB"?"en-GB":"nb-NO",
-      api:s.api.map(m=>({role:m.role,content:m.content})),messages:s.messages.map(m=>m.kind==="user"?{kind:"user",text:m.text,heard:m.heard||"",lang:m.lang==="en"?"en":"nb"}:m.kind==="recap"?{kind:"recap",recap:{good:m.recap.good,next:m.recap.next,corrections:m.recap.corrections.map(c=>({original:c.original,better:c.better,why:c.why,english:c.english}))}}:{kind:m.kind,parts:m.parts.map(p=>({t:p.t,lang:p.lang})),trans:m.trans,heard:typeof m.heard==="string"?m.heard.slice(0,5000):"",listen:m.listen==="en"?"en":"nb"})}))};
 }
 function sanitizeImport(value){return normalizeData({...value,activeId:null});}
 function importLearning(parsed){
@@ -429,3 +413,138 @@ window.addEventListener("beforeunload",event=>{if(unsaved){event.preventDefault(
 renderScenarios();renderLesson();renderNotebook();saveStatus(storageBlocked?"Saved data needs recovery":"Saved in this browser · not yet synced",storageBlocked);if(storageWarning)notice(storageWarning);
 
 acquireWriteLock();
+
+function confirmAction(title,description,label,action){
+  $("confirm-title").textContent=title;$("confirm-description").textContent=description;$("confirm-yes").textContent=label;
+  $("confirm-yes").onclick=()=>{$("confirm-dialog").close();action();};$("confirm-dialog").showModal();
+}
+$("confirm-cancel").addEventListener("click",()=>$("confirm-dialog").close());
+function deleteLearning(kind,recordId){
+  confirmAction("Delete this "+kind+"?",account?"This will also delete the online copy when your account next syncs. Export a backup first if you want to keep it.":"This removes it from this browser. Export a backup first if you want to keep it.","Delete",()=>{
+    cancelWork();const key=kind==="session"?"sessions":"phrases";data[key]=data[key].filter(r=>r.id!==recordId);
+    if(active?.id===recordId){active=null;data.activeId=null;}save();renderLesson();renderNotebook();renderHistory();
+  });
+}
+async function accountRequest(action,body){
+  const response=await fetch("/api/account/"+action,{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
+  let result;try{result=await response.json();}catch{throw Error("The account connection is unavailable. Your local copy is kept.");}
+  if(!response.ok){const error=Error(result.error||"The account connection is unavailable.");error.status=response.status;throw error;}return result;
+}
+function accountUI(){
+  $("account-status").textContent=account?`Signed in as ${account.email}. ${cloudPaused?"Sync paused. Sign in again to reconnect.":accountTutor?"Your tutor connection is managed by your account.":"The account tutor still needs to be configured."}`:accountEnabled?"Sign in with your existing account to save across devices.":"Account connection has not been enabled yet. Your browser learning is available as usual.";
+  $("sign-in-form").hidden=!accountEnabled||!!account&&!cloudPaused;$("password-help").hidden=!accountEnabled||!!account&&!cloudPaused;$("signed-in-actions").hidden=!account;
+}
+function refreshLearning(){active=data.sessions.find(s=>s.id===data.activeId)||null;renderLesson();renderNotebook();renderHistory();}
+function validateRemote(r){
+  if(!r||!["session","phrase"].includes(r.kind)||!Number.isSafeInteger(r.revision)||r.revision<1||typeof r.deleted!=="boolean"||!(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).test(r.record_id))throw Error("The online learning format could not be read.");
+  if(r.deleted)return {record_id:r.record_id,kind:r.kind,revision:r.revision,deleted:true,body:{}};
+  const d=LearningSync.empty();d[r.kind==="session"?"sessions":"phrases"].push(r.body);
+  if(!validData(d)||r.body.id!==r.record_id)throw Error("The online learning format could not be read.");
+  return {record_id:r.record_id,kind:r.kind,revision:r.revision,deleted:false,body:normalizeData(d)[r.kind==="session"?"sessions":"phrases"][0]};
+}
+function enterAccount(user,tutor){
+  if(!(/^[0-9a-f-]{36}$/i).test(user?.id))throw Error("The account identity could not be read.");
+  // Never switch away from work that failed to reach browser storage.
+  if(!save())throw Error("Export your current learning and resolve the local saving problem before switching accounts.");
+  const key="nt_account_v1_"+user.id,raw=localStorage.getItem(key);let stored=raw?JSON.parse(raw):{learning:LearningSync.empty(),base:{}};
+  if(!validData(stored.learning)||!stored.base||Array.isArray(stored.base)||typeof stored.base!=="object")throw Error("The account cache needs recovery. Its original copy has been kept.");
+  const base={};for(const [id,r] of Object.entries(stored.base)){const record=validateRemote(r);if(id!==record.record_id)throw Error("The account cache needs recovery.");base[id]=record;}
+  cancelWork();cloudEpoch++;clearTimeout(cloudTimer);cloudBusy=false;cloudPaused=false;cloudConflicts=[];
+  account=user;accountTutor=tutor;DATA_KEY=key;lastStored=raw;data=normalizeData(stored.learning);cloudBase=base;
+  refreshLearning();accountUI();renderConflicts();syncAccount();
+}
+function renderConflicts(){
+  const list=$("cloud-conflicts");list.replaceChildren();
+  for(const conflict of cloudConflicts){
+    const {local,remote}=conflict,card=el("div",undefined,"saved-card");
+    const describe=r=>r.deleted?"Deleted":r.kind==="phrase"?r.body.nb:`${SCENARIOS[r.body.scenario].title} · ${r.body.messages.length} messages · draft: ${r.body.draft||"empty"}`;
+    card.append(el("h3","Both devices changed this "+remote.kind),el("p","This device: "+describe(local)),el("p","Online: "+describe(remote)));
+    const choose=keepLocal=>{
+      if(busy||listening){$("account-error").textContent="Finish the current reply or stop the microphone first.";return;}
+      confirmAction(keepLocal?"Keep this device's version?":"Use the online version?","This replaces the other version. Export an account backup first if you want to keep your current copy.","Use this version",()=>{
+        cloudBase[remote.record_id]=remote;if(!keepLocal)LearningSync.put(data,remote);
+        cloudConflicts=cloudConflicts.filter(c=>c.remote.record_id!==remote.record_id);save();refreshLearning();renderConflicts();
+      });
+    };
+    card.append(button("Keep this device's version",()=>choose(true)),button("Use online version",()=>choose(false)));list.append(card);
+  }
+}
+async function syncAccount(){
+  clearTimeout(cloudTimer);cloudTimer=null;
+  if(!account||cloudPaused||cloudBusy||storageBlocked||!writeReady)return;
+  if(busy||listening){cloudTimer=setTimeout(syncAccount,2000);return;}
+  if(typeof navigator!=="undefined"&&navigator.onLine===false){saveStatus("Saved on this device · offline, sync pending");return;}
+  const owner=account.id,generation=cloudEpoch;const alive=()=>generation===cloudEpoch&&account?.id===owner;
+  cloudBusy=true;saveStatus("Syncing your learning…");
+  try{
+    const incoming=[];let offset=0,more=true;
+    while(more){const page=await accountRequest("records",{owner,offset});if(!alive())return;
+      if(!Array.isArray(page.records)||page.records.length>100||typeof page.more!=="boolean"||offset>6000)throw Error("The online learning response could not be read.");
+      incoming.push(...page.records.map(validateRemote));more=page.more;offset+=100;
+    }
+    // Reconcile against the latest edits, not the state at request start.
+    if(busy||listening){cloudTimer=setTimeout(syncAccount,2000);return;}
+    const merged=LearningSync.reconcile(data,cloudBase,incoming);
+    if(!validData(merged.data))throw Error("The combined learning exceeds the app's limits. Export a backup before continuing.");
+    data=merged.data;cloudBase=merged.base;cloudConflicts=merged.conflicts;
+    if(!save())throw Error("Online changes could not be saved on this device. Export a backup.");
+    refreshLearning();renderConflicts();
+    for(const r of LearningSync.pending(data,cloudBase)){
+      if(cloudConflicts.some(c=>c.remote.record_id===r.record_id))continue;
+      const result=await accountRequest("save",{owner,record:r});if(!alive())return;
+      if(!result.record)throw Error("A save could not be verified. Sync again to check the online copy.");
+      const remote=validateRemote(result.record);
+      if(remote.record_id!==r.record_id||remote.kind!==r.kind)throw Error("The online save returned a different record.");
+      if(result.saved===true&&LearningSync.equal(remote,r)){cloudBase[r.record_id]=remote;}
+      else if(result.conflict===true){
+        const local=LearningSync.records(data).find(x=>x.record_id===r.record_id)||{record_id:r.record_id,kind:r.kind,deleted:true,body:{}};
+        if(LearningSync.equal(local,remote))cloudBase[r.record_id]=remote;
+        else cloudConflicts.push({local:LearningSync.copy(local),remote});
+      }else throw Error("The online save could not be verified.");
+      if(!save())throw Error("Your device could not save the sync receipt. Export a backup.");
+    }
+    const remaining=LearningSync.pending(data,cloudBase).length;
+    saveStatus(cloudConflicts.length?"Saved on this device · choose between conflicting versions":remaining?"Saved on this device · more changes waiting":"Saved online and on this device");
+    $("account-error").textContent=cloudConflicts.length?"Open the version choices below to finish syncing.":"";
+    renderConflicts();
+    clearTimeout(cloudTimer);cloudTimer=remaining&&!cloudConflicts.length?setTimeout(syncAccount,1500):null;
+  }catch(error){if(!alive())return;clearTimeout(cloudTimer);cloudTimer=null;
+    if(error.status===401||error.status===409)cloudPaused=true;
+    saveStatus(unsaved?"Not saved · export a backup":"Saved on this device · sync pending",true);$("account-error").textContent=error.message;accountUI();
+  }finally{if(alive())cloudBusy=false;}
+}
+async function checkAccount(){
+  try{const response=await fetch("/api/account/status",{cache:"no-store",signal:AbortSignal.timeout(12000)});if(response.status===404){accountEnabled=false;accountUI();return;}if(!response.ok)throw Error();const result=await response.json();accountEnabled=result.enabled===true;if(result.user)enterAccount(result.user,result.tutor);}
+  catch{$("account-error").textContent="The account connection could not be checked. Your browser learning is still available.";}accountUI();
+}
+$("account-button").addEventListener("click",()=>{stopRecognition();stopAudio();accountUI();$("account-dialog").showModal();});
+$("sign-in-form").addEventListener("submit",async e=>{
+  e.preventDefault();$("account-error").textContent="Signing in…";
+  try{const result=await accountRequest("sign-in",{email:$("account-email").value,password:$("account-password").value});enterAccount(result.user,result.tutor);$("account-error").textContent="";}catch(error){$("account-error").textContent=error.message;}
+});
+$("password-help").addEventListener("click",()=>{
+  $("account-error").textContent="Use Supabase → Authentication → Users → your email → Send password recovery. Set a password from that email, then return here and sign in.";
+});
+$("sync-now").addEventListener("click",syncAccount);
+$("account-backup").addEventListener("click",exportBackup);
+$("migrate-browser").addEventListener("click",()=>{
+  if(!account)return;
+  confirmAction("Copy your browser learning?","A backup will download first. Your original browser learning will be kept. New sessions and phrases will be added to this account; matching IDs will keep the account version.","Back up & copy",()=>{
+    try{const raw=localStorage.getItem("nt_learning_v1");if(!raw)throw Error("No original browser learning was found.");const original=JSON.parse(raw);if(!validData(original))throw Error("The original browser learning needs recovery.");
+      const url=URL.createObjectURL(new Blob([JSON.stringify(normalizeData(original),null,2)],{type:"application/json"}));const link=el("a");link.href=url;link.download="norsk-tutor-before-account-copy.json";document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      if(!importLearning(original))throw Error("The copy could not be saved on this device.");refreshLearning();$("account-error").textContent="Copied to this account on your device. Wait for Saved online, then check another device before relying on the online copy.";
+    }catch(error){$("account-error").textContent=error.message;}
+  });
+});
+$("sign-out").addEventListener("click",()=>{
+  if(!account)return;
+  const pending=LearningSync.pending(data,cloudBase).length;
+  confirmAction("Sign out?",pending?`${pending} changes are waiting to sync. They will remain in this account's cache on this device; sign back into the same account to finish saving. Export a backup before leaving a shared device.`:"Your account cache stays on this device for your next sign-in. Your original browser learning will reopen.","Sign out",async()=>{
+    try{if(!save())throw Error("Export a backup before signing out: local saving failed.");cloudEpoch++;cloudPaused=true;clearTimeout(cloudTimer);cancelWork();await accountRequest("sign-out",{});window.location.reload();}
+    catch(error){$("account-error").textContent=error.message;accountUI();}
+  });
+});
+window.addEventListener("online",()=>syncAccount());
+window.addEventListener("focus",()=>syncAccount());
+// Static previews retain the existing local-only workflow when the backend is absent.
+if(window.location)checkAccount();
