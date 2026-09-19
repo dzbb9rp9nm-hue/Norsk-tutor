@@ -7,7 +7,8 @@ const SESSION='__Host-nt_session';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export function createAPI(env=process.env,transport=fetch){
  const enabled=env.CLOUD_ENABLED==='true';
- const ready=enabled&&env.SUPABASE_URL&&env.SUPABASE_PUBLISHABLE_KEY&&/^[a-f0-9]{64}$/i.test(env.SESSION_SECRET||'')&&env.APP_ORIGIN;
+ const configured=env.SUPABASE_URL&&env.SUPABASE_PUBLISHABLE_KEY&&/^[a-f0-9]{64}$/i.test(env.SESSION_SECRET||'')&&env.APP_ORIGIN;
+ const ready=enabled&&configured;
  const json=(body,status=200,cookies=[])=>{const headers=new Headers({'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff'});for(const c of cookies)headers.append('set-cookie',c);return new Response(JSON.stringify(body),{status,headers});};
  const cookie=(name,value,age)=>`${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${age}`;
  function seal(value){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',Buffer.from(env.SESSION_SECRET,'hex'),iv);const body=Buffer.concat([cipher.update(JSON.stringify(value)),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),body]).toString('base64url');}
@@ -32,12 +33,27 @@ export function createAPI(env=process.env,transport=fetch){
    try{const {user}=await identity(req);return json({enabled:true,user:{id:user.id,email:user.email},tutor:!!env.ANTHROPIC_API_KEY});}
    catch(e){if(e.status===401)return json({enabled:true,user:null});throw e;}
   }
-  if(!ready)fail(503,'Account connection is not enabled yet. Browser practice is still available.');
+  // Password setup can be completed before enabling cloud learning. It still
+  // requires a valid recovery access token verified by Supabase.
+  if(!configured||!enabled&&route!=='reset-password')fail(503,'Account connection is not enabled yet. Browser practice is still available.');
   if(req.method!=='POST')fail(405,'Use POST.');
   if(req.headers.get('origin')!==env.APP_ORIGIN||req.headers.get('x-norsk-request')!=='1'||!req.headers.get('content-type')?.startsWith('application/json'))fail(403,'Please use the app to make this request.');
   const raw=await req.text();if(Buffer.byteLength(raw)>1100000)fail(413,'Request is too large.');
   let body;try{body=JSON.parse(raw);}catch{fail(400,'Invalid request.');}
   if(!body||typeof body!=='object'||Array.isArray(body))fail(400,'Invalid request.');
+  if(route==='reset-password'){
+   const password=typeof body.password==='string'?body.password:'';
+   const token=typeof body.accessToken==='string'?body.accessToken:'';
+   if(password.length<12||password.length>256)fail(400,'Choose a password between 12 and 256 characters.');
+   if(!token||token.length>5000)fail(401,'Open a new password recovery email to set your password.');
+   const user=await upstream('/auth/v1/user',{token});
+   if(!UUID.test(user?.id))fail(401,'The password recovery link is no longer valid. Request a new email.');
+   const updated=await upstream('/auth/v1/user',{method:'PUT',token,body:{password}});
+   if(updated?.id!==user.id)fail(502,'The password change could not be confirmed.');
+   // Clear any app sign-in on this browser. The user signs in with their new
+   // password explicitly; the recovery token never becomes a learning session.
+   return json({changed:true},200,[cookie(SESSION,'',0)]);
+  }
   if(route==='sign-in'){
    const email=typeof body.email==='string'?body.email.trim().toLowerCase():'';
    const password=typeof body.password==='string'?body.password:'';

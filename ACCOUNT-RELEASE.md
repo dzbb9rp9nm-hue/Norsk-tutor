@@ -1,5 +1,25 @@
 # Account release — implemented locally, not activated
 
+## 19 September password recovery correction
+
+The owner published commit cd0abc8 on 18 September. The six Netlify settings
+were entered; CLOUD_ENABLED remains false. Migration 002 was run successfully.
+That version included password sign-in but lacked the recovery form. Do not
+send a recovery email until the password-reset.js update is deployed.
+
+The correction adds a password-setting dialog for Supabase's default recovery
+redirect. It removes tokens from the URL immediately, keeps the access token
+only in memory, and discards the refresh token. The server verifies that token
+with Supabase before changing the password. This endpoint works with cloud
+learning disabled; it does not sign the user into learning or migrate data.
+After the password is saved, the user returns to the app and signs in explicitly
+once cloud access is enabled. A recovery email must still be delivered to the
+owner's project-team address by Supabase's limited default sender.
+
+Validation: 53 application/API/build/recovery tests pass. Database code is
+unchanged; its isolated database test passed on 18 September and was not rerun
+on 19 September because the temporary test dependency was no longer present.
+
 ## Implemented
 
 - Email-and-password sign-in for existing Supabase users; public signup remains disabled.

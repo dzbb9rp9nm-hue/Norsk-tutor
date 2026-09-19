@@ -30,3 +30,17 @@ test('daily limit rejection makes no paid tutor request',async()=>{const f=await
 test('tampered and expired sessions cannot read learning',async()=>{const f=await fixture();let r=await f.request('records',{owner},f.cookie+'invalid');assert.equal(r.status,401);f.setFetch(async()=>Response.json({},{status:401}));r=await f.request('records',{owner},f.cookie);assert.equal(r.status,401);});
 test('sign-out revokes the upstream session and expires the private cookie',async()=>{const f=await fixture();const r=await f.request('sign-out',{},f.cookie);assert.equal(r.status,200);assert.equal(r.headers.getSetCookie().length,1);assert.ok(r.headers.getSetCookie()[0].includes('Max-Age=0'));assert.ok(f.calls.at(-1).url.includes('/logout?scope=local'));});
 test('unconfigured deployment leaves cloud disabled without exposing configuration',async()=>{const {createAPI}=await import('../server/api.mjs');const r=await createAPI({})(new Request(env.APP_ORIGIN+'/api/account/status'));assert.deepEqual(await r.json(),{enabled:false});});
+test('password setup works with cloud off only after Supabase verifies the supplied token',async()=>{
+ const {createAPI}=await import('../server/api.mjs');const calls=[];
+ const api=createAPI({...env,CLOUD_ENABLED:'false'},async(url,options)=>{calls.push({url,options});return Response.json({id:owner});});
+ const request=(body,origin=env.APP_ORIGIN)=>new Request(env.APP_ORIGIN+'/api/account/reset-password',{method:'POST',headers:{origin,'content-type':'application/json','x-norsk-request':'1'},body:JSON.stringify(body)});
+ let result=await api(request({password:'my long test password'}));assert.equal(result.status,401);assert.equal(calls.length,0);
+ result=await api(request({accessToken:'recovery-access',password:'my long test password'},'https://attacker.test'));assert.equal(result.status,403);assert.equal(calls.length,0);
+ result=await api(request({accessToken:'recovery-access',password:'my long test password'}));assert.equal(result.status,200);assert.deepEqual(await result.json(),{changed:true});
+ assert.equal(calls[0].options.method,'GET');assert.equal(calls[1].options.method,'PUT');assert.equal(calls[1].options.headers.authorization,'Bearer recovery-access');
+ assert.deepEqual(JSON.parse(calls[1].options.body),{password:'my long test password'});assert.match(result.headers.getSetCookie()[0],/Max-Age=0/);
+});
+test('expired recovery token cannot change a password',async()=>{
+ const f=await fixture();let writes=0;f.setFetch(async(_url,options)=>{if(options.method==='PUT')writes++;return Response.json({},{status:401});});
+ const result=await f.request('reset-password',{accessToken:'expired',password:'my long test password'});assert.equal(result.status,401);assert.equal(writes,0);
+});

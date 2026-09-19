@@ -4,6 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#174c42">
 <meta name="description" content="Your patient Norwegian conversation partner. Practise everyday situations and save useful phrases at your own pace.">
 <title>Norsk Tutor · A little Norwegian, every day</title>
+<script src="password-reset.js"></script>
 <link rel="stylesheet" href="styles.css"><script src="scenarios.js" defer></script><script src="tutor-prompt.js" defer></script><script src="learning.js" defer></script><script src="sync.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
@@ -72,5 +73,17 @@
 <div id="cloud-conflicts"></div><p id="account-error" class="error" role="alert"></p>
 </dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button id="confirm-cancel" class="subtle" type="button">Cancel</button><button id="confirm-yes" class="primary" type="button">Continue</button></div></dialog>
+<dialog id="password-reset-dialog" aria-labelledby="password-reset-title">
+<h2 id="password-reset-title">Choose your Norsk Tutor password</h2>
+<p>Use this password with your email address to sign in on your Mac or phone.</p>
+<form id="password-reset-form">
+<label for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+<label for="repeat-password">Repeat your password</label><input id="repeat-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+<p class="field-note">Use at least 12 characters. A few unrelated words work well.</p>
+<button id="save-password" class="primary" type="submit">Save password</button>
+</form>
+<p id="password-reset-status" role="status"></p>
+<button id="close-password-reset" class="subtle" type="button">Return to practice</button>
+</dialog>
 </body>
 </html>

@@ -520,7 +520,7 @@ async function checkAccount(){
 $("account-button").addEventListener("click",()=>{stopRecognition();stopAudio();accountUI();$("account-dialog").showModal();});
 $("sign-in-form").addEventListener("submit",async e=>{
   e.preventDefault();$("account-error").textContent="Signing in…";
-  try{const result=await accountRequest("sign-in",{email:$("account-email").value,password:$("account-password").value});enterAccount(result.user,result.tutor);$("account-error").textContent="";}catch(error){$("account-error").textContent=error.message;}
+  try{const result=await accountRequest("sign-in",{email:$("account-email").value,password:$("account-password").value});enterAccount(result.user,result.tutor);$("account-error").textContent="";}catch(error){$("account-error").textContent=error.message;}finally{$("account-password").value="";}
 });
 $("password-help").addEventListener("click",()=>{
   $("account-error").textContent="Use Supabase → Authentication → Users → your email → Send password recovery. Set a password from that email, then return here and sign in.";
@@ -547,4 +547,4 @@ $("sign-out").addEventListener("click",()=>{
 window.addEventListener("online",()=>syncAccount());
 window.addEventListener("focus",()=>syncAccount());
 // Static previews retain the existing local-only workflow when the backend is absent.
-if(window.location)checkAccount();
+if(window.location&&!(typeof PasswordRecovery!=="undefined"&&PasswordRecovery.present))checkAccount();
