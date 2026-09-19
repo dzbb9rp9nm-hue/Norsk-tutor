@@ -70,6 +70,7 @@
 <form id="sign-in-form"><label for="account-email">Email address</label><input id="account-email" type="email" autocomplete="email" required maxlength="254"><label for="account-password">Norsk Tutor password</label><input id="account-password" type="password" autocomplete="current-password" required minlength="8" maxlength="256"><button class="primary" type="submit">Sign in</button></form>
 <p class="field-note"><button id="password-help" type="button" class="subtle">I need to set or reset my password</button></p>
 <div id="signed-in-actions" hidden><p>Your account learning is separate from this browser's original learning. Pending saves stay on this device until syncing succeeds. Preferences stay on this device.</p><div class="section-actions"><button id="sync-now" class="primary">Sync now</button><button id="migrate-browser" class="subtle">Copy browser learning to my account</button><button id="account-backup" class="subtle">Export account backup</button><button id="sign-out" class="subtle">Sign out</button></div></div>
+<p id="account-sync-status" role="status" aria-live="polite"></p>
 <div id="cloud-conflicts"></div><p id="account-error" class="error" role="alert"></p>
 </dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button id="confirm-cancel" class="subtle" type="button">Cancel</button><button id="confirm-yes" class="primary" type="button">Continue</button></div></dialog>

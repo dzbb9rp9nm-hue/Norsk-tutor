@@ -45,6 +45,8 @@ function notice(message){$("notice").textContent=message;$("notice").hidden=!mes
 function saveStatus(message,error=false){
   $("save-status").textContent=message;
   $("save-status").classList.toggle("save-error",error);
+  $("account-sync-status").textContent=message;
+  $("account-sync-status").classList.toggle("save-error",error);
   $("export-recovery").hidden=recoveryRaw===null;
 }
 function save(){
