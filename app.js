@@ -91,7 +91,7 @@ function controls(){
   $("stop-audio").hidden=!speaking;
   $("retry-box").hidden=!retryJob;
 }
-function stopAudio(){speechId++;clearTimeout(autoTimer);autoTimer=null;speaking=false;if(window.speechSynthesis)window.speechSynthesis.cancel();controls();}
+function stopAudio(){window.audioLessonPlayer?.pause();speechId++;clearTimeout(autoTimer);autoTimer=null;speaking=false;if(window.speechSynthesis)window.speechSynthesis.cancel();controls();}
 function stopRecognition(){
   recognitionId++;clearTimeout(silenceTimer);silenceTimer=null;
   const old=recognition;recognition=null;listening=false;
@@ -100,11 +100,11 @@ function stopRecognition(){
 }
 function cancelWork(){epoch++;controller?.abort();controller=null;busy=false;retryJob=null;stopRecognition();stopAudio();controls();}
 function showView(next){
-  if(next!=="practice"){stopRecognition();stopAudio();}
+  if(next!=="practice"||view==="audio"){stopRecognition();stopAudio();}
   view=next;
-  ["practice","notebook","history"].forEach(name=>{$(name+"-view").hidden=name!==next;});
+  ["practice","audio","notebook","history"].forEach(name=>{$(name+"-view").hidden=name!==next;});
   document.querySelectorAll("[data-view]").forEach(b=>{const chosen=b.dataset.view===next;b.classList.toggle("selected",chosen);if(chosen)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current");});
-  $("page-title").textContent={practice:"Let's practise.",notebook:"Your phrase notebook.",history:"Your learning, saved."}[next];
+  $("page-title").textContent={practice:"Let's practise.",audio:"Listen & repeat.",notebook:"Your phrase notebook.",history:"Your learning, saved."}[next];
   if(next==="notebook")renderNotebook();
   if(next==="history")renderHistory();
   window.scrollTo({top:0});

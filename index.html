@@ -5,7 +5,7 @@
 <meta name="description" content="Your patient Norwegian conversation partner. Practise everyday situations and save useful phrases at your own pace.">
 <title>Norsk Tutor · A little Norwegian, every day</title>
 <script src="password-reset.js"></script>
-<link rel="stylesheet" href="styles.css"><script src="scenarios.js" defer></script><script src="tutor-prompt.js" defer></script><script src="learning.js" defer></script><script src="sync.js" defer></script><script src="app.js" defer></script>
+<link rel="stylesheet" href="styles.css"><script src="scenarios.js" defer></script><script src="tutor-prompt.js" defer></script><script src="learning.js" defer></script><script src="sync.js" defer></script><script src="audio-lessons.js" defer></script><script src="app.js" defer></script><script src="audio-player.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to practice</a>
@@ -14,6 +14,7 @@
 <a class="brand" href="#practice" aria-label="Norsk Tutor home"><span class="brand-mark" aria-hidden="true">n.</span><span>Norsk Tutor<small>A little Norwegian, every day.</small></span></a>
 <nav aria-label="Main navigation">
 <button class="nav-button selected" data-view="practice" aria-current="page"><span aria-hidden="true">◌</span> Practice</button>
+<button class="nav-button" data-view="audio"><span aria-hidden="true">♫</span> Listen &amp; repeat</button>
 <button class="nav-button" data-view="notebook"><span aria-hidden="true">▤</span> Phrase notebook <span id="phrase-count" class="count">0</span></button>
 <button class="nav-button" data-view="history"><span aria-hidden="true">↶</span> Saved sessions</button>
 </nav>
@@ -51,6 +52,18 @@
 <div id="finished-actions" class="finished-actions" hidden><p>Your recap is saved. Check the saving status for its online copy.</p><button id="another-session" class="primary">Choose another practice</button></div>
 </section>
 </section>
+<section id="audio-view" hidden aria-label="Listen and repeat lessons">
+<div class="welcome-heading"><span class="eyebrow">LISTEN &amp; REPEAT</span><h2>Train your ear.<br><em>Find the words.</em></h2><p>Listen to a short lesson, repeat aloud during the pauses, and then compare your answer with the model.</p></div>
+<p class="field-note">Keep this page open while listening. Playback pauses when you leave the app or lock your phone. Your voice is not recorded or graded.</p>
+<p id="audio-voice-note" class="field-note"></p><div id="audio-lessons" class="audio-lessons"></div>
+<section id="audio-player-panel" class="audio-player-panel" hidden aria-label="Audio lesson player">
+<div class="lesson-header"><div><span class="eyebrow">YOUR LESSON</span><h2 id="audio-lesson-title"></h2><p id="audio-lesson-note"></p></div><button id="audio-restart" class="subtle">Start again</button></div>
+<p id="audio-stage" class="eyebrow"></p><p id="audio-cue" class="audio-cue" lang="en"></p><p id="audio-meaning" class="field-note"></p>
+<div class="audio-controls"><button id="audio-previous" class="subtle">Previous</button><button id="audio-play" class="primary">Play</button><button id="audio-next" class="subtle">Next</button><button id="audio-replay" class="subtle">Replay step</button></div>
+<p id="audio-pause-note" class="status" role="status"></p><progress id="audio-progress" aria-label="Lesson progress" max="1" value="0"></progress><span id="audio-progress-text" class="field-note"></span><p id="audio-feedback" class="error" role="alert"></p>
+<div class="audio-options"><label for="audio-speed">Norwegian speed<select id="audio-speed"><option value="0.7">Slow</option><option value="0.85" selected>Gentle</option><option value="1">Normal</option></select></label><label for="audio-pause">Repeat pause<select id="audio-pause"><option value="1">Standard</option><option value="1.5">Long</option><option value="2">Extra long</option></select></label></div>
+<details id="audio-transcript-details"><summary>Show the lesson phrases</summary><ol id="audio-transcript"></ol></details><p id="audio-local-note" class="field-note"></p>
+</section></section>
 <section id="notebook-view" hidden aria-label="Phrase notebook"><p class="section-intro">Useful words from your conversations, ready to hear again.</p><div class="section-actions"><button id="add-phrase" class="primary">Add a phrase</button><button id="export-data" class="subtle">Export learning backup</button><button id="export-recovery" class="subtle" hidden>Download recovery copy</button><label class="subtle import-label">Import backup<input id="import-data" type="file" accept="application/json,.json" class="sr-only"></label></div><div id="phrase-list" class="saved-list"></div></section>
 <section id="history-view" hidden aria-label="Saved sessions"><p class="section-intro">Pick up where you left off, or revisit something you learned.</p><div id="session-list" class="saved-list"></div></section>
 </main>

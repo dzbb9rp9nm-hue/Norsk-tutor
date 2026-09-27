@@ -1,11 +1,12 @@
 # Norsk Tutor
 
-> **18 September local update:** Account sign-in, server tutor access, offline pending saves and conflict handling are now implemented locally, but are not published or activated. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration, verification and limitations. Earlier live-release notes below describe the deployed version.
+> Account access is enabled. The owner confirmed sign-in, online saving, and access from a phone on 19 September. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration and remaining validation details.
 
 A personal Norwegian Bokmål practice app for a beginner. Hosted as static files on Netlify, connected to the `main` branch of the GitHub repository.
 
 ## This release
 
+- Four original **Listen & repeat** lessons: making plans, your day, travel changes, and opinions. English prompts, Bokmål examples, timed speaking pauses, recall rounds, replay, speed and pause controls, and transcripts. Playback uses device voices; a Norwegian voice is required. The app pauses playback when hidden. Lesson positions stay on the current device and are not part of account sync or learning backups. No recording or pronunciation scoring.
 - 24 guided situations across food, travel, daily life, and social conversation, plus free conversation. Search and filter by topic.
 - Norwegian-first tutoring, English help, and three stages of hints.
 - Typed messages or microphone input, with editable transcripts by default.
