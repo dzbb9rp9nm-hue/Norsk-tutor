@@ -90,6 +90,44 @@ const AudioCourse = (() => {
     say('You have finished this lesson. Come back and try it again, or use one of these phrases in a conversation.', 'en', 'Well done');
     return steps;
   }
-  return {lessons, stepsFor};
+  const conversations = {
+    'make-plans': [
+      [2,'Skal vi ta en kaffe i morgen?','Shall we have a coffee tomorrow?','Tell your friend you are busy tomorrow.','Start with Jeg er…'],
+      [3,'Når passer det for deg, da?','When suits you, then?','Suggest Thursday instead.','How about… begins Hva med…'],
+      [6,'Torsdag passer. Skal vi møtes klokka to?','Thursday works. Shall we meet at two?','Ask if you can meet a little later.','Can we meet… begins Kan vi møtes…'],
+      [7,'Ja, klokka tre passer også.','Yes, three o’clock works too.','Say you will see them on Thursday.','Start with Da ses vi…']
+    ],
+    'your-day': [
+      [1,'Hvordan var dagen din?','How was your day?','Say you worked from home today.','The past of jobbe is jobbet.'],
+      [2,'Var det travelt?','Was it busy?','Say you had a lot to do.','I had… begins Jeg hadde…'],
+      [3,'Hva gjorde du etter jobb?','What did you do after work?','Say you went for a walk after work.','Begin Etter jobb, followed by gikk jeg…'],
+      [6,'Jeg er sulten. Hva skal vi gjøre?','I’m hungry. What shall we do?','Suggest cooking dinner together.','Shall we… begins Skal vi…']
+    ],
+    'travel-changes': [
+      [1,'Hei! Hva trenger du hjelp med?','Hello! What do you need help with?','Explain that your train is delayed.','My train… is Toget mitt…'],
+      [3,'Da rekker du kanskje ikke bussen.','Then you might not catch the bus.','Ask whether there is another route.','Is there… begins Finnes det…'],
+      [5,'Du kan ta bussen via sentrum.','You can take the bus via the city centre.','Ask how long it takes.','Start Hvor lang tid…'],
+      [6,'Bussen går om ti minutter.','The bus leaves in ten minutes.','Ask whether the ticket is valid on the bus too.','Is the ticket valid… begins Gjelder billetten…']
+    ],
+    'opinions': [
+      [1,'Vi kan bli med på en norsk samtalekveld. Hva synes du?','We could join a Norwegian conversation evening. What do you think?','Say you think that sounds good.','I think… begins Jeg synes…'],
+      [3,'Vi møtes og snakker i små grupper.','We meet and talk in small groups.','Ask them to explain a little more.','Can you explain… begins Kan du forklare…'],
+      [5,'Hvorfor lærer du norsk?','Why are you learning Norwegian?','Explain that you want to talk to more people.','Link your reason with fordi, meaning because.'],
+      [6,'Hva gjør du hvis du ikke forstår?','What do you do if you don’t understand?','Say that if you don’t understand, you ask again.','Begin Hvis jeg ikke forstår…']
+    ]
+  };
+  function conversationSteps(lesson, indices=null){
+    return conversations[lesson.id].filter(t=>!indices||indices.includes(t[0])).flatMap(([index,nb,en,cue,hint])=>{
+      const phrase=lesson.phrases[index],meta={phraseId:`${lesson.id}:${index}`};
+      return [
+        {type:'say',lang:'nb',text:nb,meaning:en,label:'Your conversation partner'},
+        {type:'say',lang:'en',text:cue,label:'Your turn'},
+        {type:'response',lang:'en',text:cue,label:'Answer aloud',hint,...meta},
+        {type:'say',lang:'nb',text:phrase[0],meaning:phrase[1],label:'One possible reply',...meta},
+        {type:'assess',lang:'nb',text:phrase[0],meaning:phrase[1],label:'How did that feel?',...meta}
+      ];
+    });
+  }
+  return {lessons, stepsFor, conversationSteps};
 })();
 if(typeof module !== 'undefined') module.exports = AudioCourse;

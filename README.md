@@ -6,6 +6,7 @@ A personal Norwegian Bokmål practice app for a beginner. Hosted as static files
 
 ## This release
 
+- Each listening lesson also has a four-turn guided conversation: partner speech, an English response cue, an untimed answer pause, optional hint, model answer, and self-assessment. “Practise again” replies form a targeted review within that lesson. Ratings and positions are device-local, not account synced; speech is not recorded or automatically assessed.
 - Four original **Listen & repeat** lessons: making plans, your day, travel changes, and opinions. English prompts, Bokmål examples, timed speaking pauses, recall rounds, replay, speed and pause controls, and transcripts. Playback uses device voices; a Norwegian voice is required. The app pauses playback when hidden. Lesson positions stay on the current device and are not part of account sync or learning backups. No recording or pronunciation scoring.
 - 24 guided situations across food, travel, daily life, and social conversation, plus free conversation. Search and filter by topic.
 - Norwegian-first tutoring, English help, and three stages of hints.

@@ -39,3 +39,21 @@ test('replay, navigation, errors and completion preserve a recoverable position'
   player.move(1);player.play();assert.equal(utterances.at(-1).step.text,'Last');player.replay();assert.equal(player.state().index,1);
   utterances.at(-1).next();assert.equal(player.state().done,true);player.move(-1);assert.equal(player.state().index,1);
 });
+test('conversation waits for the learner before speaking an answer and before continuing after assessment',()=>{
+  const {player,utterances,timers}=setup();
+  player.load(course.conversationSteps(course.lessons[0]));player.play();
+  utterances[0].next();utterances[1].next();
+  assert.equal(player.state().step.type,'response');assert.equal(player.state().playing,false);
+  assert.equal(utterances.length,2);assert.equal(timers.size,0);
+  player.move(1);player.play();assert.equal(utterances[2].step.text,course.lessons[0].phrases[2][0]);utterances[2].next();
+  assert.equal(player.state().step.type,'assess');assert.equal(player.state().playing,false);
+});
+test('targeted review includes only marked phrases from the chosen lesson',()=>{
+  for(const lesson of course.lessons){
+    const turns=course.conversationSteps(lesson);assert.equal(turns.filter(s=>s.type==='response').length,4);
+    const chosen=Number(turns.find(s=>s.phraseId).phraseId.split(':')[1]);
+    const review=course.conversationSteps(lesson,[chosen]);assert.equal(review.length,5);
+    assert.ok(review.filter(s=>s.phraseId).every(s=>s.phraseId===`${lesson.id}:${chosen}`));
+    assert.equal(review[2].type,'response');assert.ok(review[2].hint);assert.notEqual(review[2].text,review[3].text);
+  }
+});
