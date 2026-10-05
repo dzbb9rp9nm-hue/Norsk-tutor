@@ -59,7 +59,7 @@ Before publishing, test a Norwegian and an English conversation on the intended 
 
 Learning is saved only in this browser, under `nt_learning_v1`. Preferences use `nt_preferences_v1`. The existing `nt_key` credential remains compatible with the previous app.
 
-The API key and recent conversation text are sent directly to Anthropic. Browser speech recognition may use the browser vendor's service. No account syncing or server-side key storage has been added in this release.
+The API key and recent conversation text are sent directly to Anthropic. Browser speech recognition may use the browser vendor's service. When signed in, tutor requests go through the server and sessions/phrases sync to the account; the browser-key mode remains for signed-out use.
 
 A learning export includes sessions, drafts, transcripts, recaps, and phrases; it excludes the API key and preferences. Import merges new sessions and phrases, retaining existing records with matching IDs. Keep backups if clearing browser data or moving devices. The app reports saving failures rather than claiming the data was saved.
 
@@ -71,6 +71,10 @@ Netlify currently publishes `main`. This app remains static. `netlify.toml` runs
 
 See `ROADMAP.md` for the remaining approved improvements.
 
-## Cloud storage status
+## Current state (5 October 2026)
 
-This release includes the security/scenario expansion. Sign-in and cloud sync are not active. The Supabase project has been created and the migration installed by the owner; its three SQL checks passed. A live unauthenticated read was correctly rejected. Backend implementation, hosted account-isolation tests and a restore test remain before activating cloud storage. See `SUPABASE-SETUP.md`.
+- **Live:** Netlify publishes automatically from `main` on the public GitHub repository. Pushing to `main` publishes, so push only what is ready to go live.
+- **Accounts are active.** Email-and-password sign-in, online learning sync and the server-held tutor key have been in use since 19 September (confirmed by the owner on Mac and phone). Public signup stays disabled. See `ACCOUNT-RELEASE.md`.
+- **What syncs:** sessions and phrase notebook. **What does not sync yet:** Listen & repeat lesson positions and guided-conversation ratings (`nt_audio_progress_v1`, `nt_audio_ratings_v1`), and preferences. These stay on the device where they were made.
+- **Known gaps:** password-recovery email uses Supabase's limited default sender (no production SMTP yet); sign-in lasts at most one hour; check whether the free Supabase project pauses after a period of inactivity.
+- **Next planned work:** see `ROADMAP.md`.

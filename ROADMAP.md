@@ -1,6 +1,15 @@
 # Product roadmap
 
-> **18 September local update:** Account sign-in, server tutor access, offline pending saves and conflict handling are now implemented locally, but are not published or activated. See [ACCOUNT-RELEASE.md](ACCOUNT-RELEASE.md) for configuration, verification and limitations. Earlier live-release notes below describe the deployed version.
+## Up next (agreed 5 October 2026)
+
+1. **Sync audio-lesson progress.** Add a record kind for Listen & repeat positions and guided-conversation ratings: database migration (`kind` check constraint and `save_learning_record` validation), `server/api.mjs` allowlist, `sync.js`/`learning.js`, and `audio-player.js` reading from the learning store instead of `localStorage`. Needs a migration run in Supabase by the owner.
+2. **Daily "Today" practice.** About 10 minutes: spaced review of saved phrases and recap corrections, then a short conversation that must use them. Builds on "learning that carries over" below.
+3. **Phone-in-pocket call mode.** Fully hands-free conversation on iPhone; depends on real-device tests of browser mic/speech behaviour.
+
+Housekeeping: production SMTP for recovery email; confirm Supabase inactivity pausing.
+
+
+> **Status (5 October 2026):** Accounts, server tutor and online sync are live (activated 19 September). Listen & repeat lessons and guided conversations shipped 27 September. The "finish the account connection" steps further down are complete and kept for history.
 
 The user approved a broader set of recommendations. This implementation delivers the proposed first release, plus the phrase notebook and backups. Remaining work is recorded here so it is not mistaken for completed functionality.
 
