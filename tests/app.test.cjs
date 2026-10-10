@@ -58,7 +58,7 @@ test('hint levels preserve unsent draft and do not count as learner replies',asy
 });
 test('untrusted backup structures are rejected and unknown fields removed',()=>{
  const a=app();a.api.startSession('cafe');const backup=JSON.parse(a.store.get('nt_learning_v1'));backup.apiKey='secret';backup.sessions[0].apiKey='secret';assert.ok(a.api.validData(backup));assert.ok(!JSON.stringify(a.api.sanitizeImport(backup)).includes('secret'));
- backup.sessions[0].scenario='__proto__';assert.equal(a.api.validData(backup),false);assert.equal(a.api.validData({version:1,sessions:null}),false);
+ backup.sessions[0].scenario='__proto__';assert.equal(a.api.sanitizeImport(backup).sessions[0].scenario,'free');backup.sessions[0].scenario=42;assert.equal(a.api.validData(backup),false);assert.equal(a.api.validData({version:1,sessions:null}),false);
 });
 test('background navigation prevents automatic microphone restart after delayed reply',async()=>{
  const a=app({'nt_key':'sk-ant-test'});a.api.state.prefs.handsFree=true;a.api.startSession('cafe');let resolve;a.context.fetch=()=>new Promise(r=>resolve=r);const pending=a.api.runJob(job);a.api.showView('history');resolve(response());await pending;assert.equal(a.spoken.filter(u=>u.volume!==0).length,0);assert.equal(a.api.state.active.messages.length,3);
@@ -142,4 +142,34 @@ test('a conflict arriving during a tutor request does not detach the active sess
  const sync=a.api.syncAccount();await tick();const tutor=a.api.runJob(job);const remote={...sent,revision:1,body:{...sent.body,draft:'Other device'}};
  finishSave({ok:true,json:async()=>({conflict:true,record:remote})});await sync;finishTutor(response());await tutor;
  assert.equal(a.api.state.active,a.api.state.data.sessions[0]);assert.equal(a.api.state.data.sessions[0].messages.length,3);assert.equal(a.api.state.cloudConflicts.length,1);
+});
+const badId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+test('one unreadable saved session is set aside at startup and the rest keeps working',()=>{
+ const a=app();a.api.startSession('cafe');const stored=JSON.parse(a.store.get('nt_learning_v1'));
+ const broken={...stored.sessions[0],id:badId,messages:'damaged'};stored.sessions.push(broken);
+ const b=app({'nt_learning_v1':JSON.stringify(stored)});
+ assert.equal(b.api.state.data.sessions.length,1);assert.equal(b.api.state.active.scenario,'cafe');
+ const aside=JSON.parse(b.store.get('nt_learning_v1_set_aside'));assert.equal(aside.length,1);assert.equal(aside[0].item.id,badId);
+ assert.equal(b.get('export-recovery').hidden,false);assert.doesNotMatch(b.get('save-status').textContent,/needs recovery/);
+ assert.ok(b.api.save());assert.equal(JSON.parse(b.store.get('nt_learning_v1')).sessions.length,1);
+});
+test('a damaged account cache no longer locks the account; readable learning opens and syncs',async()=>{
+ const good=cloudPhrase.body,bad={id:badId,nb:7};
+ const a=app({['nt_account_v1_'+ownerA.id]:JSON.stringify({learning:{version:1,sessions:[],phrases:[good,bad]},base:{[badId]:{record_id:badId,kind:'phrase',revision:'x'}}})});
+ cloudTransport(a,(route,body)=>route==='save'?{saved:true,conflict:false,record:{...body.record,revision:1}}:{records:[],more:false});
+ a.api.enterAccount(ownerA,true);await tick();
+ assert.equal(a.api.state.data.phrases.length,1);assert.equal(JSON.parse(a.store.get('nt_account_v1_'+ownerA.id+'_set_aside'))[0].item.id,badId);
+ assert.equal(a.get('save-status').textContent,'Saved online and on this device');
+});
+test('unreadable online records are skipped and the rest of the sync completes',async()=>{
+ const a=app();const other='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+ cloudTransport(a,()=>({records:[cloudPhrase,{record_id:badId,kind:'phrase',revision:1,deleted:false,body:{id:badId,nb:7}}],unreadable:[other],more:false}));
+ a.api.enterAccount(ownerA,true);await tick();
+ assert.equal(a.api.state.data.phrases.length,1);assert.equal(a.get('save-status').textContent,'Saved online and on this device');assert.match(a.get('account-error').textContent,/2 online items couldn't be read/);
+});
+test('a local change is not pushed over an online copy this app cannot read',async()=>{
+ const a=app();let saves=0;
+ cloudTransport(a,route=>{if(route==='save'){saves++;return {saved:false,conflict:true,record:null,unreadable:true};}return {records:[],unreadable:[cloudPhrase.record_id],more:false};});
+ a.api.enterAccount(ownerA,true);await tick();a.api.state.data.phrases.push({...cloudPhrase.body});await a.api.syncAccount();
+ assert.equal(saves,0);assert.equal(a.get('save-status').textContent,'Saved online and on this device');
 });

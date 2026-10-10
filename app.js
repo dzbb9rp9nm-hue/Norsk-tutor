@@ -27,12 +27,25 @@ function readStored(key, fallback){
     return fallback;
   }
 }
+// Unreadable saved items are moved aside (never deleted) so the rest of the learning keeps working.
+// The set-aside copy is offered through the notebook's recovery download.
+function setAside(key,items){
+  if(!items.length)return true;
+  try{
+    const asideKey=key+"_set_aside";let list=[];
+    try{list=JSON.parse(localStorage.getItem(asideKey)||"[]");if(!Array.isArray(list))list=[];}catch{list=[];}
+    const seen=new Set(list.map(x=>JSON.stringify(x.item)));
+    for(const x of items){const text=JSON.stringify(x.item);if(!seen.has(text)){seen.add(text);list.push({kind:x.kind,item:x.item,setAsideAt:new Date().toISOString()});}}
+    const raw=JSON.stringify(list,null,2);localStorage.setItem(asideKey,raw);recoveryRaw=raw;return true;
+  }catch{return false;}
+}
+const setAsideMessage=n=>`${n===1?"One saved item":n+" saved items"} couldn't be read and ${n===1?"was":"were"} set aside. Everything else is safe. A recovery copy is available from the notebook.`;
 function safePrefs(value){
   return {speed:[0.75,0.9,1].includes(value?.speed)?value.speed:0.9, corrections:["gentle","immediate","recap"].includes(value?.corrections)?value.corrections:"gentle",handsFree:value?.handsFree===true,pause:[3000,5000,8000].includes(value?.pause)?value.pause:5000};
 }
 const prefs = safePrefs(readStored(PREFS_KEY, DEFAULT_PREFS));
 let data = readStored(DATA_KEY,{version:1,sessions:[],phrases:[],activeId:null});
-if(!validData(data)){storageBlocked=true;recoveryRaw=lastStored;storageWarning = "The saved learning format couldn't be read. The original browser data has not been changed."; data={version:1,sessions:[],phrases:[],activeId:null};}
+if(!validData(data)){const part=partitionData(data);if(part&&part.rejected.length&&setAside(DATA_KEY,part.rejected)){data=part.data;storageWarning=setAsideMessage(part.rejected.length);}else{storageBlocked=true;recoveryRaw=lastStored;storageWarning = "The saved learning format couldn't be read. The original browser data has not been changed."; data={version:1,sessions:[],phrases:[],activeId:null};}}
 else data=normalizeData(data);
 let active = data.sessions.find(s => s.id === data.activeId) || null;
 let epoch = 0, busy = false, controller = null, retryJob = null, view = "practice";
@@ -449,11 +462,20 @@ function enterAccount(user,tutor){
   // Never switch away from work that failed to reach browser storage.
   if(!save())throw Error("Export your current learning and resolve the local saving problem before switching accounts.");
   const key="nt_account_v1_"+user.id,raw=localStorage.getItem(key);let stored=raw?JSON.parse(raw):{learning:LearningSync.empty(),base:{}};
-  if(!validData(stored.learning)||!stored.base||Array.isArray(stored.base)||typeof stored.base!=="object")throw Error("The account cache needs recovery. Its original copy has been kept.");
-  const base={};for(const [id,r] of Object.entries(stored.base)){const record=validateRemote(r);if(id!==record.record_id)throw Error("The account cache needs recovery.");base[id]=record;}
+  if(!stored||!stored.base||Array.isArray(stored.base)||typeof stored.base!=="object")throw Error("The account cache needs recovery. Its original copy has been kept.");
+  let setAsideCount=0;
+  if(!validData(stored.learning)){
+    const part=partitionData(stored.learning);
+    if(!part||!setAside(key,part.rejected))throw Error("The account cache needs recovery. Its original copy has been kept.");
+    stored.learning=part.data;setAsideCount=part.rejected.length;
+  }
+  // A sync receipt that can't be read is dropped; the next sync re-checks that record online.
+  const base={};for(const [id,r] of Object.entries(stored.base)){try{const record=validateRemote(r);if(id===record.record_id)base[id]=record;}catch{}}
   cancelWork();cloudEpoch++;clearTimeout(cloudTimer);cloudBusy=false;cloudPaused=false;cloudConflicts=[];
   account=user;accountTutor=tutor;DATA_KEY=key;lastStored=raw;data=normalizeData(stored.learning);cloudBase=base;
-  refreshLearning();accountUI();renderConflicts();syncAccount();
+  refreshLearning();accountUI();renderConflicts();
+  if(setAsideCount){notice(setAsideMessage(setAsideCount));$("export-recovery").hidden=false;}
+  syncAccount();
 }
 function renderConflicts(){
   const list=$("cloud-conflicts");list.replaceChildren();
@@ -479,10 +501,13 @@ async function syncAccount(){
   const owner=account.id,generation=cloudEpoch;const alive=()=>generation===cloudEpoch&&account?.id===owner;
   cloudBusy=true;saveStatus("Syncing your learning…");
   try{
-    const incoming=[];let offset=0,more=true;
+    // Online records this app can't read are left untouched online and skipped, not allowed to stop the whole sync.
+    const incoming=[],skipped=new Set();let offset=0,more=true;
     while(more){const page=await accountRequest("records",{owner,offset});if(!alive())return;
       if(!Array.isArray(page.records)||page.records.length>100||typeof page.more!=="boolean"||offset>6000)throw Error("The online learning response could not be read.");
-      incoming.push(...page.records.map(validateRemote));more=page.more;offset+=100;
+      for(const r of page.records){try{incoming.push(validateRemote(r));}catch{if(typeof r?.record_id==="string")skipped.add(r.record_id);}}
+      if(Array.isArray(page.unreadable))for(const id of page.unreadable)if(typeof id==="string")skipped.add(id);
+      more=page.more;offset+=100;
     }
     // Reconcile against the latest edits, not the state at request start.
     if(busy||listening){cloudTimer=setTimeout(syncAccount,2000);return;}
@@ -492,8 +517,9 @@ async function syncAccount(){
     if(!save())throw Error("Online changes could not be saved on this device. Export a backup.");
     refreshLearning();renderConflicts();
     for(const r of LearningSync.pending(data,cloudBase)){
-      if(cloudConflicts.some(c=>c.remote.record_id===r.record_id))continue;
+      if(skipped.has(r.record_id)||cloudConflicts.some(c=>c.remote.record_id===r.record_id))continue;
       const result=await accountRequest("save",{owner,record:r});if(!alive())return;
+      if(result.unreadable===true&&result.saved!==true){skipped.add(r.record_id);continue;}
       if(!result.record)throw Error("A save could not be verified. Sync again to check the online copy.");
       const remote=validateRemote(result.record);
       if(remote.record_id!==r.record_id||remote.kind!==r.kind)throw Error("The online save returned a different record.");
@@ -505,9 +531,9 @@ async function syncAccount(){
       }else throw Error("The online save could not be verified.");
       if(!save())throw Error("Your device could not save the sync receipt. Export a backup.");
     }
-    const remaining=LearningSync.pending(data,cloudBase).length;
+    const remaining=LearningSync.pending(data,cloudBase).filter(r=>!skipped.has(r.record_id)).length;
     saveStatus(cloudConflicts.length?"Saved on this device · choose between conflicting versions":remaining?"Saved on this device · more changes waiting":"Saved online and on this device");
-    $("account-error").textContent=cloudConflicts.length?"Open the version choices below to finish syncing.":"";
+    $("account-error").textContent=cloudConflicts.length?"Open the version choices below to finish syncing.":skipped.size?`${skipped.size===1?"One online item":skipped.size+" online items"} couldn't be read by this version of the app and ${skipped.size===1?"was":"were"} left untouched. Everything else synced.`:"";
     renderConflicts();
     clearTimeout(cloudTimer);cloudTimer=remaining&&!cloudConflicts.length?setTimeout(syncAccount,1500):null;
   }catch(error){if(!alive())return;clearTimeout(cloudTimer);cloudTimer=null;

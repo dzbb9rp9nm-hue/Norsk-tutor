@@ -4,6 +4,7 @@ import scenarios from '../scenarios.js';
 import systemPrompt from './prompt.cjs';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION='__Host-nt_session';
+const SIGN_IN_DAYS=30;
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export function createAPI(env=process.env,transport=fetch){
  const enabled=env.CLOUD_ENABLED==='true';
@@ -12,13 +13,33 @@ export function createAPI(env=process.env,transport=fetch){
  const json=(body,status=200,cookies=[])=>{const headers=new Headers({'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff'});for(const c of cookies)headers.append('set-cookie',c);return new Response(JSON.stringify(body),{status,headers});};
  const cookie=(name,value,age)=>`${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${age}`;
  function seal(value){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',Buffer.from(env.SESSION_SECRET,'hex'),iv);const body=Buffer.concat([cipher.update(JSON.stringify(value)),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),body]).toString('base64url');}
- function read(req,name){try{const raw=(req.headers.get('cookie')||'').split('; ').find(c=>c.startsWith(name+'='))?.slice(name.length+1);if(!raw)return null;const b=Buffer.from(raw,'base64url');const decipher=createDecipheriv('aes-256-gcm',Buffer.from(env.SESSION_SECRET,'hex'),b.subarray(0,12));decipher.setAuthTag(b.subarray(12,28));const value=JSON.parse(Buffer.concat([decipher.update(b.subarray(28)),decipher.final()]));return value.exp>Date.now()?value:null;}catch{return null;}}
- async function upstream(path,{token,body,method='GET'}={}){
+ function read(req,name){try{const raw=(req.headers.get('cookie')||'').split('; ').find(c=>c.startsWith(name+'='))?.slice(name.length+1);if(!raw)return null;const b=Buffer.from(raw,'base64url');const decipher=createDecipheriv('aes-256-gcm',Buffer.from(env.SESSION_SECRET,'hex'),b.subarray(0,12));decipher.setAuthTag(b.subarray(12,28));const value=JSON.parse(Buffer.concat([decipher.update(b.subarray(28)),decipher.final()]));// New cookies carry a refresh token and last for the sign-in period; older cookies end with their access token.
+  return (value.refresh?value.until>Date.now():value.exp>Date.now())?value:null;}catch{return null;}}
+ function sessionCookie(s,until){
+  if(typeof s?.access_token!=='string'||!s.access_token||typeof s.refresh_token!=='string'||!s.refresh_token||!Number.isFinite(s.expires_in))fail(502,'Sign-in could not be completed.');
+  const age=Math.floor((until-Date.now())/1000);if(age<=0)fail(401,'Your sign-in has ended. Sign in again. Your pending learning is kept on this device.');
+  return cookie(SESSION,seal({token:s.access_token,refresh:s.refresh_token,exp:Date.now()+Math.min(s.expires_in,3600)*1000,until}),age);
+ }
+ // Swap the refresh token for a fresh access token. Supabase rotates refresh tokens, so the new
+ // cookie must reach the browser even if the rest of the request fails (see ctx.cookies).
+ async function renew(session,ctx){
+  let fresh;
+  try{fresh=await upstream('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:session.refresh},badRequestIsAuth:true});}
+  catch(e){if(e.status===401){ctx.cookies=[cookie(SESSION,'',0)];fail(401,'Your sign-in has ended. Sign in again. Your pending learning is kept on this device.');}throw e;}
+  ctx.cookies=[sessionCookie(fresh,session.until)];
+  return fresh.access_token;
+ }
+ async function upstream(path,{token,body,method='GET',badRequestIsAuth=false}={}){
   const response=await transport(env.SUPABASE_URL+path,{method,headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,...(token?{authorization:'Bearer '+token}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(12000)});
-  if(!response.ok)fail(response.status===401||response.status===403?401:response.status===429?429:502,response.status===429?'Please wait a moment before trying again.':'The account service could not complete this request.');
+  if(!response.ok)fail(response.status===401||response.status===403||badRequestIsAuth&&response.status===400?401:response.status===429?429:502,response.status===429?'Please wait a moment before trying again.':'The account service could not complete this request.');
   return response.status===204?null:response.json();
  }
- async function identity(req){const session=read(req,SESSION);if(!session)fail(401,'Sign in again. Your pending learning is kept on this device.');const user=await upstream('/auth/v1/user',{token:session.token});if(!UUID.test(user.id))fail(401,'Please sign in again.');return {user,token:session.token};}
+ async function identity(req,ctx){
+  const session=read(req,SESSION);if(!session)fail(401,'Sign in again. Your pending learning is kept on this device.');
+  // Renew a minute before the access token runs out, so a long reply never starts with a stale token.
+  const token=session.refresh&&session.exp-Date.now()<60000?await renew(session,ctx):session.token;
+  const user=await upstream('/auth/v1/user',{token});if(!UUID.test(user.id))fail(401,'Please sign in again.');return {user,token};
+ }
  function cleanRecord(record){
   if(!record||!UUID.test(record.record_id)||!['session','phrase'].includes(record.kind)||!Number.isSafeInteger(record.revision)||record.revision<0||typeof record.deleted!=='boolean')fail(400,'Invalid learning record.');
   if(record.deleted)return {...record,body:{}};
@@ -26,12 +47,12 @@ export function createAPI(env=process.env,transport=fetch){
   if(!learning.validData(value)||record.body.id!==record.record_id)fail(400,'Invalid learning record.');
   return {...record,body:learning.normalizeData(value)[record.kind==='session'?'sessions':'phrases'][0]};
  }
- return async function handle(req){try{
+ return async function handle(req){const ctx={cookies:[]};const reply=(body,status=200,extra=[])=>json(body,status,[...ctx.cookies,...extra]);try{
   const route=new URL(req.url).pathname.split('/').pop();
   if(route==='status'&&req.method==='GET'){
    if(!ready)return json({enabled:false});
-   try{const {user}=await identity(req);return json({enabled:true,user:{id:user.id,email:user.email},tutor:!!env.ANTHROPIC_API_KEY});}
-   catch(e){if(e.status===401)return json({enabled:true,user:null});throw e;}
+   try{const {user}=await identity(req,ctx);return reply({enabled:true,user:{id:user.id,email:user.email},tutor:!!env.ANTHROPIC_API_KEY});}
+   catch(e){if(e.status===401)return reply({enabled:true,user:null});throw e;}
   }
   // Password setup can be completed before enabling cloud learning. It still
   // requires a valid recovery access token verified by Supabase.
@@ -59,27 +80,32 @@ export function createAPI(env=process.env,transport=fetch){
    const password=typeof body.password==='string'?body.password:'';
    if(email.length>254||!/^\S+@\S+\.\S+$/.test(email)||password.length<8||password.length>256)fail(400,'Enter your email and password.');
    const session=await upstream('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password}});
-   if(!session.access_token||!UUID.test(session.user?.id)||!Number.isFinite(session.expires_in))fail(502,'Sign-in could not be completed.');
-   const age=Math.min(session.expires_in,3600);
-   return json({user:{id:session.user.id,email:session.user.email},tutor:!!env.ANTHROPIC_API_KEY},200,[cookie(SESSION,seal({token:session.access_token,exp:Date.now()+age*1000}),age)]);
+   if(!UUID.test(session.user?.id))fail(502,'Sign-in could not be completed.');
+   return json({user:{id:session.user.id,email:session.user.email},tutor:!!env.ANTHROPIC_API_KEY},200,[sessionCookie(session,Date.now()+SIGN_IN_DAYS*86400000)]);
   }
   if(route==='sign-out'){
    const session=read(req,SESSION);
-   if(session)await upstream('/auth/v1/logout?scope=local',{method:'POST',token:session.token}).catch(e=>{if(e.status!==401)throw e;});
+   // Revoke the refresh token upstream too; renew first if the access token has run out.
+   if(session){let token=session.token;if(session.refresh&&session.exp-Date.now()<60000){try{token=await renew(session,ctx);}catch{}}
+    await upstream('/auth/v1/logout?scope=local',{method:'POST',token}).catch(e=>{if(e.status!==401)throw e;});}
    return json({signedOut:true},200,[cookie(SESSION,'',0)]);
   }
-  const {user,token}=await identity(req);
+  const {user,token}=await identity(req,ctx);
   // Every client mutation/read is bound to the workspace it came from.
   if(body.owner!==user.id)fail(409,'The signed-in account changed. Reload before continuing.');
   if(route==='records'){
    const offset=body.offset??0;if(!Number.isInteger(offset)||offset<0||offset>6000)fail(400,'Invalid page.');
    const records=await upstream(`/rest/v1/learning_records?select=record_id,kind,body,revision,deleted&kind=in.(session,phrase)&order=record_id&limit=100&offset=${offset}`,{token});
-   return json({records:records.map(r=>cleanRecord(r)),more:records.length===100});
+   // One unreadable record must not block the rest. It stays untouched online and is reported by ID.
+   const readable=[],unreadable=[];
+   for(const r of records){try{readable.push(cleanRecord(r));}catch{if(UUID.test(r?.record_id))unreadable.push(r.record_id);}}
+   return reply({records:readable,unreadable,more:records.length===100});
   }
   if(route==='save'){
    const r=cleanRecord(body.record);
    const result=await upstream('/rest/v1/rpc/save_learning_record',{method:'POST',token,body:{p_record_id:r.record_id,p_kind:r.kind,p_body:r.body,p_expected_revision:r.revision,p_deleted:r.deleted}});
-   return json({saved:result.saved,conflict:result.conflict,record:result.record?cleanRecord(result.record):null});
+   let record=null;try{record=result.record?cleanRecord(result.record):null;}catch{return reply({saved:result.saved,conflict:result.conflict,record:null,unreadable:true});}
+   return reply({saved:result.saved,conflict:result.conflict,record});
   }
   if(route==='tutor'){
    if(!env.ANTHROPIC_API_KEY)fail(503,'The account tutor is not configured yet.');
@@ -90,8 +116,8 @@ export function createAPI(env=process.env,transport=fetch){
    if(allowed!==true)fail(429,'You have reached the practice limit. Please try again later.');
    const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:job.kind==='recap'?1400:850,system:systemPrompt(job,{scenario},{corrections}),messages:[...messages,{role:'user',content:job.text}]}),signal:AbortSignal.timeout(25000)});
    if(!response.ok)fail(response.status===429?429:502,'The tutor could not respond. Please try again.');
-   const reply=await response.json();return json({content:reply.content,stop_reason:reply.stop_reason});
+   const answer=await response.json();return reply({content:answer.content,stop_reason:answer.stop_reason});
   }
   fail(404,'Unknown request.');
- }catch(e){return json({error:e.status?e.message:'The connection was interrupted. Your learning is kept on this device.'},e.status||502);}};
+ }catch(e){return reply({error:e.status?e.message:'The connection was interrupted. Your learning is kept on this device.'},e.status||502);}};
 }

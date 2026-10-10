@@ -76,5 +76,7 @@ See `ROADMAP.md` for the remaining approved improvements.
 - **Live:** Netlify publishes automatically from `main` on the public GitHub repository. Pushing to `main` publishes, so push only what is ready to go live.
 - **Accounts are active.** Email-and-password sign-in, online learning sync and the server-held tutor key have been in use since 19 September (confirmed by the owner on Mac and phone). Public signup stays disabled. See `ACCOUNT-RELEASE.md`.
 - **What syncs:** sessions and phrase notebook. **What does not sync yet:** Listen & repeat lesson positions and guided-conversation ratings (`nt_audio_progress_v1`, `nt_audio_ratings_v1`), and preferences. These stay on the device where they were made.
-- **Known gaps:** password-recovery email uses Supabase's limited default sender (no production SMTP yet); sign-in lasts at most one hour; check whether the free Supabase project pauses after a period of inactivity.
+- **Known gaps:** password-recovery email uses Supabase's limited default sender (no production SMTP yet); check whether the free Supabase project pauses after a period of inactivity.
+- **Staying signed in:** a sign-in lasts 30 days; the server renews the short-lived Supabase token in the background.
+- **Damaged or unrecognised records:** a saved session or phrase that can't be read is set aside (never deleted) instead of blocking the app or sync. Set-aside items can be downloaded from the notebook's recovery copy. Sessions from a scenario that was later renamed or removed reopen as free conversation.
 - **Next planned work:** see `ROADMAP.md`.

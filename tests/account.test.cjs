@@ -4,10 +4,11 @@ const owner='11111111-1111-4111-8111-111111111111';
 const other='22222222-2222-4222-8222-222222222222';
 const env={CLOUD_ENABLED:'true',APP_ORIGIN:'https://norsk.test',SUPABASE_URL:'https://db.test',SUPABASE_PUBLISHABLE_KEY:'public-test',SESSION_SECRET:'a'.repeat(64),ANTHROPIC_API_KEY:'private-test'};
 const phrase={record_id:owner,kind:'phrase',revision:0,deleted:false,body:{id:owner,nb:'Hei',en:'Hi',origin:'Test'}};
-async function fixture(){
+async function fixture(opts={}){
  const {createAPI}=await import('../server/api.mjs');const calls=[];let fetcher=async(url,options)=>{
   calls.push({url,options});
-  if(url.includes('/token?grant_type=password'))return Response.json({access_token:'secret-token',expires_in:3600,user:{id:owner,email:'learner@example.test'}});
+  if(url.includes('/token?grant_type=password'))return Response.json({access_token:'secret-token',refresh_token:'refresh-1',expires_in:opts.expiresIn??3600,user:{id:owner,email:'learner@example.test'}});
+  if(url.includes('/token?grant_type=refresh_token'))return Response.json({access_token:'secret-token-2',refresh_token:'refresh-2',expires_in:3600,user:{id:owner,email:'learner@example.test'}});
   if(url.endsWith('/user'))return Response.json({id:owner,email:'learner@example.test'});
   if(url.includes('/logout'))return new Response(null,{status:204});
   if(url.includes('claim_tutor_request'))return Response.json(true);
@@ -21,7 +22,7 @@ async function fixture(){
  const signed=await request('sign-in',{email:'learner@example.test',password:'correct horse battery staple'});const cookie=signed.headers.getSetCookie()[0].split(';')[0];
  return {api,request,cookie,signed,calls,setFetch:f=>fetcher=f};
 }
-test('sign-in cookies are encrypted, private, short-lived and absent from response JSON',async()=>{const f=await fixture();assert.match(f.signed.headers.getSetCookie()[0],/HttpOnly; Secure; SameSite=Strict; Max-Age=3600/);assert.ok(!f.cookie.includes('secret-token'));assert.ok(!JSON.stringify(await f.signed.json()).includes('secret-token'));assert.match(f.calls[0].url,/token\?grant_type=password/);});
+test('sign-in cookies are encrypted, private, short-lived and absent from response JSON',async()=>{const f=await fixture();assert.match(f.signed.headers.getSetCookie()[0],/HttpOnly; Secure; SameSite=Strict; Max-Age=259(1999|2000)$/);assert.ok(!f.cookie.includes('secret-token'));assert.ok(!f.cookie.includes('refresh-1'));assert.ok(!JSON.stringify(await f.signed.json()).includes('secret-token'));assert.match(f.calls[0].url,/token\?grant_type=password/);});
 test('authentication and request origin checks precede all learning access',async()=>{const f=await fixture();let r=await f.request('records',{owner});assert.equal(r.status,401);r=await f.request('records',{owner},f.cookie,{origin:'https://attacker.test'});assert.equal(r.status,403);r=await f.request('records',{owner},f.cookie,{'x-norsk-request':''});assert.equal(r.status,403);assert.equal(f.calls.filter(c=>c.url.includes('/learning_records')).length,0);});
 test('account switches reject stale workspace saves',async()=>{const f=await fixture();const r=await f.request('save',{owner:other,record:phrase},f.cookie);assert.equal(r.status,409);assert.equal(f.calls.filter(c=>c.url.includes('save_learning_record')).length,0);});
 test('server validates learning and strips unknown credential fields',async()=>{const f=await fixture();let r=await f.request('save',{owner,record:{...phrase,body:{...phrase.body,api_key:'do-not-copy'}}},f.cookie);assert.equal(r.status,200);assert.ok(!f.calls.at(-1).options.body.includes('do-not-copy'));r=await f.request('save',{owner,record:{...phrase,body:{...phrase.body,nb:42}}},f.cookie);assert.equal(r.status,400);});
@@ -43,4 +44,41 @@ test('password setup works with cloud off only after Supabase verifies the suppl
 test('expired recovery token cannot change a password',async()=>{
  const f=await fixture();let writes=0;f.setFetch(async(_url,options)=>{if(options.method==='PUT')writes++;return Response.json({},{status:401});});
  const result=await f.request('reset-password',{accessToken:'expired',password:'my long test password'});assert.equal(result.status,401);assert.equal(writes,0);
+});
+
+const cookieOf=r=>r.headers.getSetCookie()[0]?.split(';')[0];
+test('a fresh sign-in is used as-is without renewing',async()=>{const f=await fixture();const r=await f.request('records',{owner},f.cookie);assert.equal(r.status,200);assert.equal(r.headers.getSetCookie().length,0);assert.equal(f.calls.filter(c=>c.url.includes('grant_type=refresh_token')).length,0);});
+test('an expiring sign-in is renewed quietly and the new private cookie is returned',async()=>{
+ const f=await fixture({expiresIn:30});const r=await f.request('records',{owner},f.cookie);assert.equal(r.status,200);
+ const renewal=f.calls.find(c=>c.url.includes('grant_type=refresh_token'));assert.deepEqual(JSON.parse(renewal.options.body),{refresh_token:'refresh-1'});
+ assert.equal(f.calls.at(-1).options.headers.authorization,'Bearer secret-token-2');
+ const set=r.headers.getSetCookie();assert.equal(set.length,1);assert.match(set[0],/^__Host-nt_session=.+HttpOnly; Secure; SameSite=Strict; Max-Age=\d+$/);assert.ok(!set[0].includes('secret-token-2')&&!set[0].includes('refresh-2'));
+ const age=Number(set[0].match(/Max-Age=(\d+)/)[1]);assert.ok(age>29*86400&&age<=30*86400,'renewal keeps the original 30-day sign-in period');
+ const again=await f.request('records',{owner},cookieOf(r));assert.equal(again.status,200);assert.equal(again.headers.getSetCookie().length,0);
+});
+test('a renewed cookie still reaches the browser when the rest of the request fails',async()=>{
+ const f=await fixture({expiresIn:30});const base=f.calls.length;f.setFetch(async url=>{if(url.includes('grant_type=refresh_token'))return Response.json({access_token:'secret-token-2',refresh_token:'refresh-2',expires_in:3600});if(url.endsWith('/user'))return Response.json({id:owner});if(url.includes('claim_tutor_request'))return Response.json(true);return new Response('down',{status:500});});
+ const r=await f.request('tutor',{owner,job:{kind:'message',text:'Hei'},scenario:'cafe',corrections:'gentle',messages:[]},f.cookie);assert.equal(r.status,502);assert.equal(r.headers.getSetCookie().length,1);assert.ok(!r.headers.getSetCookie()[0].includes('Max-Age=0'));
+});
+test('a revoked refresh token signs the learner out and clears the cookie',async()=>{
+ const f=await fixture({expiresIn:30});f.setFetch(async url=>{if(url.includes('grant_type=refresh_token'))return Response.json({error:'invalid_grant'},{status:400});throw Error('Should not continue: '+url);});
+ let r=await f.request('records',{owner},f.cookie);assert.equal(r.status,401);assert.match(r.headers.getSetCookie()[0],/Max-Age=0/);
+ r=await f.api(new Request(env.APP_ORIGIN+'/api/account/status',{headers:{cookie:f.cookie}}));assert.deepEqual(await r.json(),{enabled:true,user:null});assert.match(r.headers.getSetCookie()[0],/Max-Age=0/);
+});
+test('an outage during renewal is not mistaken for being signed out',async()=>{const f=await fixture({expiresIn:30});f.setFetch(async()=>new Response('down',{status:503}));const r=await f.request('records',{owner},f.cookie);assert.equal(r.status,502);assert.equal(r.headers.getSetCookie().length,0);});
+test('sign-out renews an expired access token so the refresh token is revoked upstream',async()=>{const f=await fixture({expiresIn:30});const r=await f.request('sign-out',{},f.cookie);assert.equal(r.status,200);const logout=f.calls.find(c=>c.url.includes('/logout'));assert.equal(logout.options.headers.authorization,'Bearer secret-token-2');const set=r.headers.getSetCookie();assert.equal(set.length,1);assert.match(set[0],/Max-Age=0/);});
+test('one unreadable online record is skipped and reported instead of blocking the rest',async()=>{
+ const f=await fixture();const bad='33333333-3333-4333-8333-333333333333';
+ f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});if(url.includes('/learning_records?'))return Response.json([{...phrase,revision:1},{record_id:bad,kind:'phrase',revision:1,deleted:false,body:{id:bad,nb:42}}]);throw Error(url);});
+ const r=await f.request('records',{owner},f.cookie);assert.equal(r.status,200);const body=await r.json();assert.equal(body.records.length,1);assert.deepEqual(body.unreadable,[bad]);
+});
+test('a session from a removed scenario syncs as free conversation',async()=>{
+ const f=await fixture();const sid='44444444-4444-4444-8444-444444444444',now=new Date().toISOString();
+ const session={id:sid,scenario:'old-scenario',createdAt:now,updatedAt:now,completed:false,draft:'',messages:[],api:[]};
+ f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});if(url.includes('/learning_records?'))return Response.json([{record_id:sid,kind:'session',revision:1,deleted:false,body:session}]);throw Error(url);});
+ const body=await (await f.request('records',{owner},f.cookie)).json();assert.equal(body.records[0].body.scenario,'free');assert.equal(body.unreadable.length,0);
+});
+test('a conflicting online copy that cannot be read is reported, not thrown',async()=>{
+ const f=await fixture();f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});if(url.includes('save_learning_record'))return Response.json({saved:false,conflict:true,record:{...phrase,revision:3,body:{id:owner,nb:42}}});throw Error(url);});
+ const r=await f.request('save',{owner,record:phrase},f.cookie);assert.equal(r.status,200);assert.deepEqual(await r.json(),{saved:false,conflict:true,record:null,unreadable:true});
 });

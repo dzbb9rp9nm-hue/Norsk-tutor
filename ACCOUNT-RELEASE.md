@@ -23,7 +23,7 @@ on 19 September because the temporary test dependency was no longer present.
 ## Implemented
 
 - Email-and-password sign-in for existing Supabase users; public signup remains disabled.
-- Encrypted Secure, HttpOnly, SameSite=Strict host-only cookies. Access tokens never enter JavaScript storage; no refresh token is retained. Sessions last at most one hour, then require another email code.
+- Encrypted Secure, HttpOnly, SameSite=Strict host-only cookies. Access and refresh tokens never enter JavaScript storage; both live only inside the encrypted cookie. The server renews the access token quietly shortly before it expires, so a sign-in lasts 30 days (fixed from the moment of signing in, not extended by use). Signing out revokes the refresh token at Supabase. If Supabase rejects the refresh token (revoked, or the user signed out elsewhere), the cookie is cleared and the app asks for a new sign-in.
 - Same-origin POST requests with a custom request header, live identity verification, and workspace-owner binding.
 - Server-held Claude credential, fixed tutor model/token budgets, IP limits and an atomic per-user allowance (150 requests per database day, at least three seconds apart). Failed tutor attempts also consume allowance.
 - Account-specific caches containing learning and acknowledged revisions in one atomic browser write. Pending saves are derived from differences against those revisions and survive reload.
