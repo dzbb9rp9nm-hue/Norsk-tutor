@@ -30,15 +30,15 @@ function createLessonPlayer({speak, cancel, schedule=setTimeout, unschedule=clea
 if(typeof module !== 'undefined')module.exports={createLessonPlayer};
 if(typeof document !== 'undefined') (()=>{
   const get=id=>document.getElementById(id), synth=window.speechSynthesis;
-  let selected=null, currentUtterance=null, progress={}, storageWarning=false, mode='learn', ratings={};
-  try{const saved=JSON.parse(localStorage.getItem('nt_audio_ratings_v1')||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))ratings=saved;}catch{}
-  const key='nt_audio_progress_v1';
-  try{const stored=JSON.parse(localStorage.getItem(key)||'{}');if(stored&&typeof stored==='object'&&!Array.isArray(stored))progress=stored;}catch{}
+  let selected=null, currentUtterance=null, mode='learn';
+  // Your place and your ratings are kept with the rest of your learning (see app.js), so they are
+  // saved, backed up and, when signed in, synced between devices.
+  const store=window.audioProgressStore;
+  const rating=key=>store.rating(key);
   function persist(state){
     if(!selected)return;
-    progress[selected.id+(mode==='learn'?'':':'+mode)]=state.index;
-    try{localStorage.setItem(key,JSON.stringify(progress));}catch{storageWarning=true;}
-    get('audio-local-note').textContent=storageWarning?'Your place could not be saved. You can keep listening.':'Your place is saved on this device. Lesson progress does not sync between devices yet.';
+    store.setPosition(selected.id+(mode==='learn'?'':':'+mode),state.index);
+    get('audio-local-note').textContent=store.synced()?'Your place is saved and syncs with your account.':'Your place is saved on this device. Sign in to keep it in step across devices.';
   }
   const player=createLessonPlayer({
     cancel(){if(currentUtterance){currentUtterance.onend=currentUtterance.onerror=null;currentUtterance=null;}synth?.cancel();},
@@ -63,7 +63,7 @@ if(typeof document !== 'undefined') (()=>{
       get('audio-replay').hidden=response||assess;
       get('audio-transcript-details').hidden=mode!=='learn'&&!state.done;
       get('audio-conversation').hidden=mode!=='learn'||!state.done;
-      get('audio-review').hidden=!state.done||!AudioCourse.conversationSteps(selected).some(s=>s.phraseId&&ratings[s.phraseId]==='again');
+      get('audio-review').hidden=!state.done||!AudioCourse.conversationSteps(selected).some(s=>s.phraseId&&rating(s.phraseId)==='again');
       get('audio-play').textContent=state.playing?'Pause':state.done?'Play again':'Play';
       get('audio-previous').disabled=state.index===0;
       get('audio-next').disabled=state.done;
@@ -83,15 +83,15 @@ if(typeof document !== 'undefined') (()=>{
   let reviewIndices=[];
   function selectLesson(lesson,nextMode='learn'){
     stopRecognition();stopAudio();selected=lesson;mode=nextMode;
-    reviewIndices=lesson.phrases.map((_,i)=>i).filter(i=>ratings[`${lesson.id}:${i}`]==='again');
+    reviewIndices=lesson.phrases.map((_,i)=>i).filter(i=>rating(`${lesson.id}:${i}`)==='again');
     get('audio-player-panel').hidden=false;
     get('audio-pause').parentElement.hidden=mode!=='learn';
     get('audio-lesson-title').textContent=lesson.title+(mode==='learn'?'':mode==='review'?' · Practise again':' · Your turn');
-    get('audio-lesson-note').textContent=mode==='learn'?lesson.note:'Listen to your partner, answer aloud, then hear a possible reply. Use a hint whenever you need one. Your choices are saved on this device; your voice is not recorded or graded.';
+    get('audio-lesson-note').textContent=mode==='learn'?lesson.note:'Listen to your partner, answer aloud, then hear a possible reply. Use a hint whenever you need one. Your choices are saved with your learning; your voice is not recorded or graded.';
     const transcript=get('audio-transcript');transcript.replaceChildren();
     for(const [nb,en] of lesson.phrases){const row=document.createElement('li'),phrase=document.createElement('p'),meaning=document.createElement('p');phrase.textContent=nb;phrase.lang='nb';meaning.textContent=en;row.append(phrase,meaning);transcript.append(row);}
     get('audio-transcript-details').open=false;
-    player.load(lessonSteps(),mode==='review'?0:progress[lesson.id+(mode==='learn'?'':':'+mode)]);
+    player.load(lessonSteps(),mode==='review'?0:store.position(lesson.id+(mode==='learn'?'':':'+mode)));
     get('audio-player-panel').scrollIntoView({block:'start'});
     get(player.state().step?.type==='response'?'audio-answer':player.state().step?.type==='assess'?'audio-comfortable':'audio-play').focus({preventScroll:true});
   }
@@ -106,14 +106,15 @@ if(typeof document !== 'undefined') (()=>{
     const review=document.createElement('button');review.className='subtle';review.textContent='Practise difficult replies';review.addEventListener('click',()=>selectLesson(lesson,'review'));review.dataset.lessonReview=lesson.id;
     card.append(number,title,desc,open,conversation,review);list.append(card);
   });
-  function updateReviews(){document.querySelectorAll('[data-lesson-review]').forEach(button=>{button.hidden=!AudioCourse.conversationSteps(AudioCourse.lessons.find(l=>l.id===button.dataset.lessonReview)).some(s=>s.phraseId&&ratings[s.phraseId]==='again');});}
+  function updateReviews(){document.querySelectorAll('[data-lesson-review]').forEach(button=>{button.hidden=!AudioCourse.conversationSteps(AudioCourse.lessons.find(l=>l.id===button.dataset.lessonReview)).some(s=>s.phraseId&&rating(s.phraseId)==='again');});}
   updateReviews();
+  // Progress that arrives from another device refreshes the "Practise difficult replies" buttons.
+  window.onAudioProgressChanged=updateReviews;
   get('audio-hint').addEventListener('click',()=>{get('audio-hint-text').textContent=player.state().step?.hint||'';});
   get('audio-answer').addEventListener('click',()=>{player.move(1);player.play();});
   for(const [id,rating] of [['audio-comfortable','comfortable'],['audio-again','again']])get(id).addEventListener('click',()=>{
     const state=player.state();if(state.step?.type!=='assess')return;
-    ratings[state.step.phraseId]=rating;
-    try{localStorage.setItem('nt_audio_ratings_v1',JSON.stringify(ratings));}catch{storageWarning=true;}
+    store.setRating(state.step.phraseId,rating);
     updateReviews();player.move(1);if(!player.state().done)player.play();
   });
   get('audio-conversation').addEventListener('click',()=>selectLesson(selected,'conversation'));

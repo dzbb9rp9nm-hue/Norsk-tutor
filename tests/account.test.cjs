@@ -82,3 +82,27 @@ test('a conflicting online copy that cannot be read is reported, not thrown',asy
  const f=await fixture();f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});if(url.includes('save_learning_record'))return Response.json({saved:false,conflict:true,record:{...phrase,revision:3,body:{id:owner,nb:42}}});throw Error(url);});
  const r=await f.request('save',{owner,record:phrase},f.cookie);assert.equal(r.status,200);assert.deepEqual(await r.json(),{saved:false,conflict:true,record:null,unreadable:true});
 });
+const AUDIO='a0d10000-0000-4000-8000-000000000001';
+test('changed-since paging asks Supabase only for records after the bookmark, in change order',async()=>{
+ const f=await fixture();let asked;f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});asked=url;return Response.json([{...phrase,revision:1,updated_at:'2026-10-10T17:05:01.123456+00:00'}]);});
+ let r=await f.request('records',{owner,after:{at:'2026-10-10T17:00:00.000Z',id:'00000000-0000-0000-0000-000000000000'}},f.cookie);const body=await r.json();
+ assert.equal(r.status,200);assert.match(asked,/order=updated_at\.asc,record_id\.asc/);assert.match(asked,/kind=in\.\(session,phrase,audio\)/);
+ assert.ok(decodeURIComponent(asked).includes('or=(updated_at.gt."2026-10-10T17:00:00.000Z",and(updated_at.eq."2026-10-10T17:00:00.000Z",record_id.gt.00000000-0000-0000-0000-000000000000))'));
+ assert.deepEqual(body.last,{at:'2026-10-10T17:05:01.123456+00:00',id:owner});assert.equal(body.records[0].updated_at,undefined);
+ r=await f.request('records',{owner},f.cookie);assert.ok(!asked.includes('or='),'no bookmark means a full download');
+ r=await f.request('records',{owner,after:{at:'yesterday',id:owner}},f.cookie);assert.equal(r.status,400);
+ r=await f.request('records',{owner,after:{at:'2026-10-10T17:00:00Z',id:'x),record_id.gt.(1'}},f.cookie);assert.equal(r.status,400);
+});
+test('a tab opened before the update can still page the old way',async()=>{const f=await fixture();let asked;f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});asked=url;return Response.json([]);});const r=await f.request('records',{owner,offset:100},f.cookie);assert.equal(r.status,200);assert.match(asked,/order=record_id&limit=100&offset=100$/);assert.match(asked,/kind=in\.\(session,phrase\)/);});
+test('lesson progress is validated and cleaned like other learning',async()=>{
+ const f=await fixture();const good={record_id:AUDIO,kind:'audio',revision:0,deleted:false,body:{progress:{greetings:{v:4,at:1}},ratings:{'greetings:0':{v:'again',at:2,extra:'x'}},stray:1}};
+ let r=await f.request('save',{owner,record:good},f.cookie);assert.equal(r.status,200);const sent=JSON.parse(f.calls.at(-1).options.body);
+ assert.equal(sent.p_kind,'audio');assert.deepEqual(sent.p_body,{progress:{greetings:{v:4,at:1}},ratings:{'greetings:0':{v:'again',at:2}}});
+ r=await f.request('save',{owner,record:{...good,record_id:owner}},f.cookie);assert.equal(r.status,400);
+ r=await f.request('save',{owner,record:{...good,body:{progress:{x:{v:-1,at:1}},ratings:{}}}},f.cookie);assert.equal(r.status,400);
+});
+test('lesson progress is skipped quietly until the database update has been run',async()=>{
+ const f=await fixture();f.setFetch(async url=>{if(url.endsWith('/user'))return Response.json({id:owner});if(url.includes('save_learning_record'))return Response.json({message:'violates check constraint'},{status:400});throw Error(url);});
+ const r=await f.request('save',{owner,record:{record_id:AUDIO,kind:'audio',revision:0,deleted:false,body:{progress:{},ratings:{}}}},f.cookie);assert.equal(r.status,200);assert.deepEqual(await r.json(),{saved:false,conflict:false,record:null,deferred:true});
+ const p=await f.request('save',{owner,record:phrase},f.cookie);assert.equal(p.status,502,'other saves still report real failures');
+});

@@ -64,3 +64,35 @@ test('database setup enforces owner isolation, validated writes and revision con
     assert.equal((await db.query('select * from public.learning_records where owner_id=$1',[ownerB])).rows.length,1);
   }finally{await db.close();}
 });
+
+test('lesson-progress update: safe to rerun, stores progress, refuses bad shapes, stamps each save in order', {skip:!process.env.PGLITE_MODULE},async()=>{
+  const {PGlite}=require(process.env.PGLITE_MODULE);
+  const db=await PGlite.create();
+  const owner='11111111-1111-4111-8111-111111111111',audio='a0d10000-0000-4000-8000-000000000001',phrase='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  try{
+    await db.exec(`create role anon nologin; create role authenticated nologin;
+      create schema auth; create table auth.users(id uuid primary key);
+      create function auth.uid() returns uuid language sql stable as
+      $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+      grant usage on schema auth to authenticated,anon;
+      grant execute on function auth.uid() to authenticated,anon;`);
+    await db.query('insert into auth.users(id) values ($1)',[owner]);
+    for(const f of ['001_learning.sql','002_tutor_limits.sql'])await db.exec(fs.readFileSync('database/'+f,'utf8'));
+    const migration=fs.readFileSync('database/003_audio_and_change_times.sql','utf8');
+    await db.exec(migration);await db.exec(migration); // Running it twice must be harmless.
+    const check=(await db.query("select pg_catalog.pg_get_constraintdef(oid) like '%audio%' as ok from pg_catalog.pg_constraint where conname='learning_records_kind_check'")).rows[0].ok;assert.equal(check,true);
+    await db.query("select set_config('request.jwt.claim.sub',$1,false)",[owner]);await db.exec('set role authenticated');
+    const save=async(id,kind,body,revision=0)=>(await db.query('select public.save_learning_record($1,$2,$3::jsonb,$4,false) as result',[id,kind,JSON.stringify(body),revision])).rows[0].result;
+    let r=await save(phrase,'phrase',{id:phrase,nb:'Hei',en:'Hi',origin:'Test'});assert.equal(r.saved,true,'existing kinds still save');
+    const first=r.record.updated_at;
+    r=await save(audio,'audio',{progress:{greetings:{v:3,at:1}},ratings:{}});assert.equal(r.saved,true);assert.equal(r.record.kind,'audio');
+    assert.ok(new Date(r.record.updated_at)>=new Date(first),'later saves get later stamps');
+    r=await save(audio,'audio',{progress:{greetings:{v:5,at:2}},ratings:{}},1);assert.equal(r.record.revision,2);
+    await assert.rejects(save(phrase.replace('a','b'),'audio',{progress:{},ratings:{}}),/Invalid lesson progress/);
+    await assert.rejects(save(audio,'audio',{progress:[],ratings:{}},2),/Invalid lesson progress/);
+    await assert.rejects(save(audio,'audio',{progress:{},ratings:{},extra:1},2),/Invalid lesson progress/);
+    await assert.rejects(save(phrase,'mystery',{},1),/Invalid learning record/);
+    const rows=(await db.query('select record_id,updated_at from public.learning_records order by updated_at,record_id')).rows;
+    assert.deepEqual(rows.map(x=>x.record_id),[phrase,audio],'change order matches save order');
+  }finally{await db.close();}
+});

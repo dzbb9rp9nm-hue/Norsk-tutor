@@ -10,3 +10,15 @@ test('lost save response is reconciled without duplicate writes',()=>{const r=ph
 test('deletions sync as tombstones and stale edits cannot silently resurrect them',()=>{const r=phrase('Hei'),m=sync.reconcile(sync.empty(),{},[r]);m.data.phrases=[];assert.equal(sync.pending(m.data,m.base)[0].deleted,true);const tombstone={...r,body:{},deleted:true,revision:2};const deleted=sync.reconcile(m.data,m.base,[tombstone]);assert.deepEqual(sync.pending(deleted.data,deleted.base),[]);const stale=sync.empty();stale.phrases.push(phrase('Hallo').body);assert.equal(sync.reconcile(stale,{[id]:r},[tombstone]).conflicts.length,1);});
 test('edits made while a save is in flight remain pending after receipt',()=>{const r=phrase('Hei'),d=sync.empty();d.phrases.push(phrase('Hallo').body);const p=sync.pending(d,{[id]:r});assert.equal(p[0].body.nb,'Hallo');});
 test('independent account caches do not share acknowledged revisions',()=>{const a=sync.reconcile(sync.empty(),{},[phrase('Hei')]);const b=sync.reconcile(sync.empty(),{},[]);assert.equal(a.data.phrases.length,1);assert.equal(b.data.phrases.length,0);assert.deepEqual(b.base,{});});
+const AUDIO='a0d10000-0000-4000-8000-000000000001';
+const withAudio=(progress,ratings={})=>({...sync.empty(),audio:{progress,ratings}});
+test('empty lesson progress is never uploaded; real progress is',()=>{assert.deepEqual(sync.pending(withAudio({}),{}),[]);const p=sync.pending(withAudio({a:{v:2,at:5}}),{});assert.equal(p.length,1);assert.equal(p[0].kind,'audio');assert.equal(p[0].record_id,AUDIO);});
+test('lesson progress from two devices merges itself, newest entry winning, without a conflict',()=>{
+ const base={[AUDIO]:{record_id:AUDIO,kind:'audio',revision:1,deleted:false,body:{progress:{a:{v:1,at:1}},ratings:{}}}};
+ const local=withAudio({a:{v:5,at:10},b:{v:2,at:3}});
+ const remote={record_id:AUDIO,kind:'audio',revision:2,deleted:false,body:{progress:{a:{v:7,at:20}},ratings:{'a:0':{v:'again',at:4}}}};
+ const m=sync.reconcile(local,base,[remote]);assert.equal(m.conflicts.length,0);
+ assert.deepEqual(m.data.audio,{progress:{a:{v:7,at:20},b:{v:2,at:3}},ratings:{'a:0':{v:'again',at:4}}});
+ const p=sync.pending(m.data,m.base);assert.equal(p.length,1);assert.equal(p[0].revision,2,'the merged copy is sent on top of the newest online version');
+});
+test('unchanged local progress simply takes the online copy',()=>{const remote={record_id:AUDIO,kind:'audio',revision:1,deleted:false,body:{progress:{a:{v:3,at:9}},ratings:{}}};const m=sync.reconcile(withAudio({}),{},[remote]);assert.deepEqual(m.data.audio.progress,{a:{v:3,at:9}});assert.deepEqual(sync.pending(m.data,m.base),[]);});

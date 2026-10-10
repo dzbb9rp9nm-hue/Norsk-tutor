@@ -3,6 +3,7 @@
 const $ = id => document.getElementById(id);
 const DEFAULT_PREFS = {speed:0.9, corrections:"gentle", handsFree:false, pause:5000};
 let DATA_KEY = "nt_learning_v1";
+let cloudCursor=null;
 let account=null,cloudBase={},cloudBusy=false,cloudTimer=null,cloudEpoch=0,cloudPaused=false,cloudConflicts=[];
 let accountEnabled=false,accountTutor=false;
 const PREFS_KEY = "nt_preferences_v1";
@@ -47,6 +48,8 @@ const prefs = safePrefs(readStored(PREFS_KEY, DEFAULT_PREFS));
 let data = readStored(DATA_KEY,{version:1,sessions:[],phrases:[],activeId:null});
 if(!validData(data)){const part=partitionData(data);if(part&&part.rejected.length&&setAside(DATA_KEY,part.rejected)){data=part.data;storageWarning=setAsideMessage(part.rejected.length);}else{storageBlocked=true;recoveryRaw=lastStored;storageWarning = "The saved learning format couldn't be read. The original browser data has not been changed."; data={version:1,sessions:[],phrases:[],activeId:null};}}
 else data=normalizeData(data);
+if(!data.audio)data.audio={progress:{},ratings:{}};
+importLegacyAudio();
 let active = data.sessions.find(s => s.id === data.activeId) || null;
 let epoch = 0, busy = false, controller = null, retryJob = null, view = "practice";
 let recognition = null, listening = false, recognitionId = 0, silenceTimer = null, autoTimer = null;
@@ -73,7 +76,7 @@ function save(){
     // Compare immediately before writing. The storage event also stops writes when another tab saves.
     const existing=localStorage.getItem(DATA_KEY);
     if(existing!==lastStored){storageBlocked=true;recoveryRaw=existing;return save();}
-    const serialized=JSON.stringify(account?{learning:data,base:cloudBase}:data);
+    const serialized=JSON.stringify(account?{learning:data,base:cloudBase,cursor:cloudCursor}:data);
     if(serialized.length>4500000)throw new Error("Storage limit");
     localStorage.setItem(DATA_KEY,serialized);lastStored=serialized;unsaved=false;
     saveStatus(account?"Saved on this device · waiting to sync":"Saved in this browser · not yet synced");
@@ -345,16 +348,41 @@ function openSettings(){
   $("connection-status").textContent=`${account?"Using your account tutor connection.":getKey()?"API key saved (not tested).":"No API key saved yet."} ${hasMic?"Speech recognition is available; microphone permission is checked when you speak.":"Speech recognition isn't available here. Typing still works."} ${hasVoice?"Norwegian playback voice found.":"No Norwegian voice detected yet; available voices depend on your device."}`;
   $("settings-dialog").showModal();
 }
+// Listen & repeat progress lives in the learning data, so it is saved, backed up and synced
+// like sessions and phrases. audio-player.js reads and writes it through this small store.
+function setAudioEntry(group,key,value){
+  if(typeof key!=="string"||!key||key.length>100||key==="__proto__")return;
+  if(!data.audio)data.audio={progress:{},ratings:{}};
+  const current=data.audio[group][key];if(current&&current.v===value)return;
+  data.audio={...data.audio,[group]:{...data.audio[group],[key]:{v:value,at:Date.now()}}};save();
+}
+window.audioProgressStore={
+  position:key=>data.audio?.progress[key]?.v,
+  rating:key=>data.audio?.ratings[key]?.v,
+  setPosition:(key,index)=>{if(Number.isInteger(index)&&index>=0&&index<=10000)setAudioEntry("progress",key,index);},
+  setRating:(key,value)=>{if(AUDIO_RATINGS.includes(value))setAudioEntry("ratings",key,value);},
+  synced:()=>!!account
+};
+// Progress saved before this update lived in separate browser keys. Bring it in once, marked as old
+// (time 0) so anything already synced from another device takes priority.
+function importLegacyAudio(){
+  const read=k=>{try{const v=JSON.parse(localStorage.getItem(k)||"{}");return v&&typeof v==="object"&&!Array.isArray(v)?v:{};}catch{return {};}};
+  const legacy={progress:{},ratings:{}};
+  for(const [k,v] of Object.entries(read("nt_audio_progress_v1")))if(Number.isInteger(v)&&v>=0&&v<=10000&&k.length<=100)legacy.progress[k]={v,at:0};
+  for(const [k,v] of Object.entries(read("nt_audio_ratings_v1")))if(AUDIO_RATINGS.includes(v)&&k.length<=100)legacy.ratings[k]={v,at:0};
+  const merged=mergeAudio(data.audio,legacy);
+  if(validAudio(merged)&&!LearningSync.equal({body:merged},{body:data.audio}))data.audio=merged;
+}
 function exportBackup(){
   // Build an explicit allowlist. Preferences and credentials are never exported.
-  const backup={version:1,sessions:data.sessions,phrases:data.phrases,activeId:data.activeId};
+  const backup={version:1,sessions:data.sessions,phrases:data.phrases,audio:data.audio,activeId:data.activeId};
   const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}));const link=el("a");link.href=url;link.download=`norsk-tutor-backup-${new Date().toISOString().slice(0,10)}.json`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function sanitizeImport(value){return normalizeData({...value,activeId:null});}
 function importLearning(parsed){
   if(!validData(parsed))throw new Error("Invalid backup");
   const imported=sanitizeImport(parsed);
-  const candidate={...data,sessions:[...data.sessions],phrases:[...data.phrases]};
+  const candidate={...data,sessions:[...data.sessions],phrases:[...data.phrases],audio:mergeAudio(data.audio,imported.audio)};
   for(const s of imported.sessions)if(!candidate.sessions.some(old=>old.id===s.id))candidate.sessions.push(s);
   for(const p of imported.phrases)if(!candidate.phrases.some(old=>old.id===p.id||old.nb.toLocaleLowerCase()===p.nb.toLocaleLowerCase()))candidate.phrases.push(p);
   if(!validData(candidate)||JSON.stringify(candidate).length>4500000)throw new Error("Backup exceeds storage limit");
@@ -449,10 +477,11 @@ function accountUI(){
   $("account-status").textContent=account?`Signed in as ${account.email}. ${cloudPaused?"Sync paused. Sign in again to reconnect.":accountTutor?"Your tutor connection is managed by your account.":"The account tutor still needs to be configured."}`:accountEnabled?"Sign in with your existing account to save across devices.":"Account connection has not been enabled yet. Your browser learning is available as usual.";
   $("sign-in-form").hidden=!accountEnabled||!!account&&!cloudPaused;$("password-help").hidden=!accountEnabled||!!account&&!cloudPaused;$("signed-in-actions").hidden=!account;
 }
-function refreshLearning(){active=data.sessions.find(s=>s.id===data.activeId)||null;renderLesson();renderNotebook();renderHistory();}
+function refreshLearning(){active=data.sessions.find(s=>s.id===data.activeId)||null;renderLesson();renderNotebook();renderHistory();try{window.onAudioProgressChanged?.();}catch{}}
 function validateRemote(r){
-  if(!r||!["session","phrase"].includes(r.kind)||!Number.isSafeInteger(r.revision)||r.revision<1||typeof r.deleted!=="boolean"||!(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).test(r.record_id))throw Error("The online learning format could not be read.");
+  if(!r||!["session","phrase","audio"].includes(r.kind)||!Number.isSafeInteger(r.revision)||r.revision<1||typeof r.deleted!=="boolean"||!(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).test(r.record_id))throw Error("The online learning format could not be read.");
   if(r.deleted)return {record_id:r.record_id,kind:r.kind,revision:r.revision,deleted:true,body:{}};
+  if(r.kind==="audio"){if(r.record_id!==AUDIO_RECORD_ID||!validAudio(r.body))throw Error("The online learning format could not be read.");return {record_id:r.record_id,kind:"audio",revision:r.revision,deleted:false,body:normalizeAudio(r.body)};}
   const d=LearningSync.empty();d[r.kind==="session"?"sessions":"phrases"].push(r.body);
   if(!validData(d)||r.body.id!==r.record_id)throw Error("The online learning format could not be read.");
   return {record_id:r.record_id,kind:r.kind,revision:r.revision,deleted:false,body:normalizeData(d)[r.kind==="session"?"sessions":"phrases"][0]};
@@ -472,7 +501,9 @@ function enterAccount(user,tutor){
   // A sync receipt that can't be read is dropped; the next sync re-checks that record online.
   const base={};for(const [id,r] of Object.entries(stored.base)){try{const record=validateRemote(r);if(id===record.record_id)base[id]=record;}catch{}}
   cancelWork();cloudEpoch++;clearTimeout(cloudTimer);cloudBusy=false;cloudPaused=false;cloudConflicts=[];
-  account=user;accountTutor=tutor;DATA_KEY=key;lastStored=raw;data=normalizeData(stored.learning);cloudBase=base;
+  // The bookmark of the last change already downloaded. Missing or odd → the next sync downloads everything.
+  const cursor=stored.cursor&&typeof stored.cursor==="object"&&typeof stored.cursor.at==="string"&&Number.isFinite(Date.parse(stored.cursor.at))&&/^[0-9a-f-]{36}$/i.test(stored.cursor.id)?{at:stored.cursor.at,id:stored.cursor.id}:null;
+  account=user;accountTutor=tutor;DATA_KEY=key;lastStored=raw;data=normalizeData(stored.learning);cloudBase=base;cloudCursor=cursor;importLegacyAudio();
   refreshLearning();accountUI();renderConflicts();
   if(setAsideCount){notice(setAsideMessage(setAsideCount));$("export-recovery").hidden=false;}
   syncAccount();
@@ -493,8 +524,8 @@ function renderConflicts(){
     card.append(button("Keep this device's version",()=>choose(true)),button("Use online version",()=>choose(false)));list.append(card);
   }
 }
-async function syncAccount(){
-  clearTimeout(cloudTimer);cloudTimer=null;
+async function syncAccount(full=false){
+  clearTimeout(cloudTimer);cloudTimer=null;if(full!==true)full=false;
   if(!account||cloudPaused||cloudBusy||storageBlocked||!writeReady)return;
   if(busy||listening){cloudTimer=setTimeout(syncAccount,2000);return;}
   if(typeof navigator!=="undefined"&&navigator.onLine===false){saveStatus("Saved on this device · offline, sync pending");return;}
@@ -502,28 +533,39 @@ async function syncAccount(){
   cloudBusy=true;saveStatus("Syncing your learning…");
   try{
     // Online records this app can't read are left untouched online and skipped, not allowed to stop the whole sync.
-    const incoming=[],skipped=new Set();let offset=0,more=true;
-    while(more){const page=await accountRequest("records",{owner,offset});if(!alive())return;
-      if(!Array.isArray(page.records)||page.records.length>100||typeof page.more!=="boolean"||offset>6000)throw Error("The online learning response could not be read.");
+    // Ask only for what changed since the bookmark. Start two minutes early as a safety margin:
+    // receiving something twice is harmless, missing something is not. "Sync now" checks everything.
+    const incoming=[],skipped=new Set(),waiting=new Set();let more=true,pages=0,cursor=full||!cloudCursor?null:cloudCursor;
+    let after=cursor?{at:new Date(Date.parse(cursor.at)-120000).toISOString(),id:"00000000-0000-0000-0000-000000000000"}:null;
+    while(more){const page=await accountRequest("records",{owner,after});if(!alive())return;
+      if(!Array.isArray(page.records)||page.records.length>100||typeof page.more!=="boolean"||++pages>100)throw Error("The online learning response could not be read.");
       for(const r of page.records){try{incoming.push(validateRemote(r));}catch{if(typeof r?.record_id==="string")skipped.add(r.record_id);}}
       if(Array.isArray(page.unreadable))for(const id of page.unreadable)if(typeof id==="string")skipped.add(id);
-      more=page.more;offset+=100;
+      const last=page.last&&typeof page.last.at==="string"&&Number.isFinite(Date.parse(page.last.at))&&/^[0-9a-f-]{36}$/i.test(page.last.id)?page.last:null;
+      // Without a bookmark there is nothing safe to resume from, so the next sync downloads everything again.
+      if(last){after=last;cursor=last;}else if(page.records.length){cursor=null;more=false;cloudCursor=null;}
+      more=page.more;
     }
     // Reconcile against the latest edits, not the state at request start.
     if(busy||listening){cloudTimer=setTimeout(syncAccount,2000);return;}
     const merged=LearningSync.reconcile(data,cloudBase,incoming);
     if(!validData(merged.data))throw Error("The combined learning exceeds the app's limits. Export a backup before continuing.");
-    data=merged.data;cloudBase=merged.base;cloudConflicts=merged.conflicts;
+    data=merged.data;cloudBase=merged.base;cloudConflicts=merged.conflicts;if(cursor)cloudCursor=cursor;
     if(!save())throw Error("Online changes could not be saved on this device. Export a backup.");
     refreshLearning();renderConflicts();
     for(const r of LearningSync.pending(data,cloudBase)){
-      if(skipped.has(r.record_id)||cloudConflicts.some(c=>c.remote.record_id===r.record_id))continue;
+      if(skipped.has(r.record_id)||waiting.has(r.record_id)||cloudConflicts.some(c=>c.remote.record_id===r.record_id))continue;
       const result=await accountRequest("save",{owner,record:r});if(!alive())return;
+      if(result.deferred===true){waiting.add(r.record_id);continue;}
       if(result.unreadable===true&&result.saved!==true){skipped.add(r.record_id);continue;}
       if(!result.record)throw Error("A save could not be verified. Sync again to check the online copy.");
       const remote=validateRemote(result.record);
       if(remote.record_id!==r.record_id||remote.kind!==r.kind)throw Error("The online save returned a different record.");
       if(result.saved===true&&LearningSync.equal(remote,r)){cloudBase[r.record_id]=remote;}
+      else if(result.conflict===true&&remote.kind==="audio"){
+        // Another device saved lesson progress first: combine both (newest entry wins) and send again.
+        data.audio=LearningSync.merge(data.audio,remote.deleted?{}:remote.body);cloudBase[r.record_id]=remote;
+      }
       else if(result.conflict===true){
         const local=LearningSync.records(data).find(x=>x.record_id===r.record_id)||{record_id:r.record_id,kind:r.kind,deleted:true,body:{}};
         if(LearningSync.equal(local,remote))cloudBase[r.record_id]=remote;
@@ -531,7 +573,7 @@ async function syncAccount(){
       }else throw Error("The online save could not be verified.");
       if(!save())throw Error("Your device could not save the sync receipt. Export a backup.");
     }
-    const remaining=LearningSync.pending(data,cloudBase).filter(r=>!skipped.has(r.record_id)).length;
+    const remaining=LearningSync.pending(data,cloudBase).filter(r=>!skipped.has(r.record_id)&&!waiting.has(r.record_id)).length;
     saveStatus(cloudConflicts.length?"Saved on this device · choose between conflicting versions":remaining?"Saved on this device · more changes waiting":"Saved online and on this device");
     $("account-error").textContent=cloudConflicts.length?"Open the version choices below to finish syncing.":skipped.size?`${skipped.size===1?"One online item":skipped.size+" online items"} couldn't be read by this version of the app and ${skipped.size===1?"was":"were"} left untouched. Everything else synced.`:"";
     renderConflicts();
@@ -553,7 +595,7 @@ $("sign-in-form").addEventListener("submit",async e=>{
 $("password-help").addEventListener("click",()=>{
   $("account-error").textContent="Use Supabase → Authentication → Users → your email → Send password recovery. Set a password from that email, then return here and sign in.";
 });
-$("sync-now").addEventListener("click",syncAccount);
+$("sync-now").addEventListener("click",()=>syncAccount(true));
 $("account-backup").addEventListener("click",exportBackup);
 $("migrate-browser").addEventListener("click",()=>{
   if(!account)return;

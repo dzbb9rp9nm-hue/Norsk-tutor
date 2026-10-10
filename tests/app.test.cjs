@@ -116,7 +116,9 @@ const ownerA={id:'11111111-1111-4111-8111-111111111111',email:'a@example.test'};
 const ownerB={id:'22222222-2222-4222-8222-222222222222',email:'b@example.test'};
 const cloudPhrase={record_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',kind:'phrase',revision:1,deleted:false,body:{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',nb:'Hei',en:'Hi',origin:'Test'}};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function cloudTransport(a,handler){a.context.fetch=async(url,options)=>({ok:true,json:async()=>handler(url.split('/').pop(),JSON.parse(options.body))});}
+function cloudTransport(a,handler){a.context.fetch=async(url,options)=>({ok:true,json:async()=>{const route=url.split('/').pop(),body=JSON.parse(options.body),result=handler(route,body);
+ // A plain records-style answer to a save means "accept it", so older tests need not model every save.
+ return route==='save'&&result&&!('saved' in result)&&!('conflict' in result)&&!('deferred' in result)?{saved:true,conflict:false,record:{...body.record,revision:(body.record.revision||0)+1}}:result;}});}
 test('sign-in opens a separate workspace without automatically migrating browser learning',async()=>{
  const a=app();a.api.startSession('cafe');const original=a.store.get('nt_learning_v1');cloudTransport(a,()=>({records:[cloudPhrase],more:false}));a.api.enterAccount(ownerA,true);await tick();
  assert.equal(a.api.state.data.sessions.length,0);assert.equal(a.api.state.data.phrases[0].nb,'Hei');assert.equal(a.store.get('nt_learning_v1'),original);assert.equal(a.get('save-status').textContent,'Saved online and on this device');
@@ -172,4 +174,31 @@ test('a local change is not pushed over an online copy this app cannot read',asy
  cloudTransport(a,route=>{if(route==='save'){saves++;return {saved:false,conflict:true,record:null,unreadable:true};}return {records:[],unreadable:[cloudPhrase.record_id],more:false};});
  a.api.enterAccount(ownerA,true);await tick();a.api.state.data.phrases.push({...cloudPhrase.body});await a.api.syncAccount();
  assert.equal(saves,0);assert.equal(a.get('save-status').textContent,'Saved online and on this device');
+});
+test('after the first sync, later syncs ask only for changes since the bookmark; Sync now checks everything',async()=>{
+ const a=app();const asked=[];const stamp='2026-10-10T17:05:01.123456+00:00';
+ cloudTransport(a,(route,body)=>{if(route==='records'){asked.push(body.after);return {records:asked.length===1?[cloudPhrase]:[],unreadable:[],more:false,last:asked.length===1?{at:stamp,id:cloudPhrase.record_id}:null};}});
+ a.api.enterAccount(ownerA,true);await tick();assert.equal(asked[0],null,'first sync downloads everything');
+ assert.deepEqual(JSON.parse(a.store.get('nt_account_v1_'+ownerA.id)).cursor,{at:stamp,id:cloudPhrase.record_id},'bookmark survives a reload');
+ await a.api.syncAccount();assert.equal(asked[1].at,new Date(Date.parse(stamp)-120000).toISOString(),'starts two minutes early as a safety margin');
+ assert.equal(a.api.state.data.phrases.length,1,'nothing is lost when no changes arrive');
+ a.get('sync-now').events.click();await tick();assert.equal(asked[2],null,'Sync now does a full check');
+});
+test('Listen & repeat progress is saved with learning, included in backups and moved over from the old keys',async()=>{
+ const a=app({'nt_audio_progress_v1':JSON.stringify({greetings:4}),'nt_audio_ratings_v1':JSON.stringify({'greetings:1':'again'})});
+ const store=a.context.window.audioProgressStore;assert.equal(store.position('greetings'),4);assert.equal(store.rating('greetings:1'),'again');
+ store.setPosition('greetings',6);store.setRating('greetings:2','comfortable');
+ const saved=JSON.parse(a.store.get('nt_learning_v1'));assert.equal(saved.audio.progress.greetings.v,6);assert.ok(saved.audio.progress.greetings.at>0);assert.equal(saved.audio.ratings['greetings:1'].at,0,'old progress is marked as old');
+ const b=app(Object.fromEntries(a.store));assert.equal(b.context.window.audioProgressStore.position('greetings'),6,'the new value is not overwritten by the old key');
+ store.setPosition('bad',-1);store.setRating('greetings:3','great');assert.equal(store.position('bad'),undefined);assert.equal(store.rating('greetings:3'),undefined);
+});
+test('signed-in lesson progress syncs to the account',async()=>{
+ const a=app();let sent=null;cloudTransport(a,(route,body)=>{if(route==='save'&&body.record.kind==='audio')sent=body.record;return {records:[],more:false};});
+ a.api.enterAccount(ownerA,true);await tick();a.context.window.audioProgressStore.setPosition('greetings',3);await a.api.syncAccount();
+ assert.equal(sent.record_id,'a0d10000-0000-4000-8000-000000000001');assert.equal(sent.body.progress.greetings.v,3);assert.equal(a.get('save-status').textContent,'Saved online and on this device');
+});
+test('before the database update, lesson progress waits quietly and everything else still syncs',async()=>{
+ const a=app();let phraseSaved=false;cloudTransport(a,(route,body)=>{if(route==='save')return body.record.kind==='audio'?{deferred:true}:(phraseSaved=true,{saved:true,conflict:false,record:{...body.record,revision:1}});return {records:[],more:false};});
+ a.api.enterAccount(ownerA,true);await tick();a.context.window.audioProgressStore.setPosition('greetings',3);a.api.state.data.phrases.push({...cloudPhrase.body});await a.api.syncAccount();
+ assert.ok(phraseSaved);assert.equal(a.get('account-error').textContent,'');assert.equal(a.get('save-status').textContent,'Saved online and on this device');
 });

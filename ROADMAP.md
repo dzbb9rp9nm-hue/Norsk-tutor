@@ -2,7 +2,7 @@
 
 ## Up next (agreed 5 October 2026)
 
-1. **Sync audio-lesson progress.** Add a record kind for Listen & repeat positions and guided-conversation ratings: database migration (`kind` check constraint and `save_learning_record` validation), `server/api.mjs` allowlist, `sync.js`/`learning.js`, and `audio-player.js` reading from the learning store instead of `localStorage`. Needs a migration run in Supabase by the owner.
+1. ~~**Sync audio-lesson progress.**~~ Built 10 October 2026, together with changed-since sync downloads. Live once `database/003_audio_and_change_times.sql` has been run in Supabase.
 2. **Daily "Today" practice.** About 10 minutes: spaced review of saved phrases and recap corrections, then a short conversation that must use them. Builds on "learning that carries over" below.
 3. **Phone-in-pocket call mode.** Fully hands-free conversation on iPhone; depends on real-device tests of browser mic/speech behaviour.
 

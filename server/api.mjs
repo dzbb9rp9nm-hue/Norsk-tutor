@@ -5,6 +5,8 @@ import systemPrompt from './prompt.cjs';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION='__Host-nt_session';
 const SIGN_IN_DAYS=30;
+// PostgREST timestamps look like 2026-10-10T17:05:01.123456+00:00.
+const STAMP=/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?(Z|[+-]\d\d:\d\d)$/;
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export function createAPI(env=process.env,transport=fetch){
  const enabled=env.CLOUD_ENABLED==='true';
@@ -41,8 +43,12 @@ export function createAPI(env=process.env,transport=fetch){
   const user=await upstream('/auth/v1/user',{token});if(!UUID.test(user.id))fail(401,'Please sign in again.');return {user,token};
  }
  function cleanRecord(record){
-  if(!record||!UUID.test(record.record_id)||!['session','phrase'].includes(record.kind)||!Number.isSafeInteger(record.revision)||record.revision<0||typeof record.deleted!=='boolean')fail(400,'Invalid learning record.');
+  if(!record||!UUID.test(record.record_id)||!['session','phrase','audio'].includes(record.kind)||!Number.isSafeInteger(record.revision)||record.revision<0||typeof record.deleted!=='boolean')fail(400,'Invalid learning record.');
   if(record.deleted)return {...record,body:{}};
+  if(record.kind==='audio'){
+   if(record.record_id!==learning.AUDIO_RECORD_ID||!learning.validAudio(record.body))fail(400,'Invalid learning record.');
+   return {...record,body:learning.normalizeAudio(record.body)};
+  }
   const value={version:1,sessions:record.kind==='session'?[record.body]:[],phrases:record.kind==='phrase'?[record.body]:[]};
   if(!learning.validData(value)||record.body.id!==record.record_id)fail(400,'Invalid learning record.');
   return {...record,body:learning.normalizeData(value)[record.kind==='session'?'sessions':'phrases'][0]};
@@ -94,16 +100,30 @@ export function createAPI(env=process.env,transport=fetch){
   // Every client mutation/read is bound to the workspace it came from.
   if(body.owner!==user.id)fail(409,'The signed-in account changed. Reload before continuing.');
   if(route==='records'){
-   const offset=body.offset??0;if(!Number.isInteger(offset)||offset<0||offset>6000)fail(400,'Invalid page.');
-   const records=await upstream(`/rest/v1/learning_records?select=record_id,kind,body,revision,deleted&kind=in.(session,phrase)&order=record_id&limit=100&offset=${offset}`,{token});
+   // Pages are read in the order records last changed. "after" names the last record already
+   // received (its change time and ID), so the next page, or the next sync, starts just after it.
+   // Without "after" this is a full download.
+   const after=body.after??null;
+   if(after!==null&&(typeof after!=='object'||typeof after.at!=='string'||!STAMP.test(after.at)||!UUID.test(after.id)))fail(400,'Invalid page.');
+   const at=encodeURIComponent(`"${after?.at}"`);
+   const since=after?`&or=(updated_at.gt.${at},and(updated_at.eq.${at},record_id.gt.${after.id}))`:'';
+   // A tab opened before this update still pages by position; keep that working until it reloads.
+   const legacy=after===null&&body.offset!==undefined;const offset=legacy?body.offset:0;
+   if(legacy&&(!Number.isInteger(offset)||offset<0||offset>6000))fail(400,'Invalid page.');
+   const records=await upstream(`/rest/v1/learning_records?select=record_id,kind,body,revision,deleted,updated_at&kind=in.(${legacy?'session,phrase':'session,phrase,audio'})${since}&order=${legacy?'record_id':'updated_at.asc,record_id.asc'}&limit=100${legacy?'&offset='+offset:''}`,{token});
+   const tail=records.at(-1);const last=tail&&STAMP.test(tail.updated_at)?{at:tail.updated_at,id:tail.record_id}:null;
    // One unreadable record must not block the rest. It stays untouched online and is reported by ID.
    const readable=[],unreadable=[];
-   for(const r of records){try{readable.push(cleanRecord(r));}catch{if(UUID.test(r?.record_id))unreadable.push(r.record_id);}}
-   return reply({records:readable,unreadable,more:records.length===100});
+   for(const r of records){try{const {updated_at:_skip,...rest}=r;readable.push(cleanRecord(rest));}catch{if(UUID.test(r?.record_id))unreadable.push(r.record_id);}}
+   return reply({records:readable,unreadable,more:records.length===100,last});
   }
   if(route==='save'){
    const r=cleanRecord(body.record);
-   const result=await upstream('/rest/v1/rpc/save_learning_record',{method:'POST',token,body:{p_record_id:r.record_id,p_kind:r.kind,p_body:r.body,p_expected_revision:r.revision,p_deleted:r.deleted}});
+   let result;
+   try{result=await upstream('/rest/v1/rpc/save_learning_record',{method:'POST',token,body:{p_record_id:r.record_id,p_kind:r.kind,p_body:r.body,p_expected_revision:r.revision,p_deleted:r.deleted}});}
+   // Until the database update for lesson progress has been run, the database refuses that kind.
+   // Skip it quietly rather than failing the whole sync.
+   catch(e){if(r.kind==='audio'&&e.status===502)return reply({saved:false,conflict:false,record:null,deferred:true});throw e;}
    let record=null;try{record=result.record?cleanRecord(result.record):null;}catch{return reply({saved:result.saved,conflict:result.conflict,record:null,unreadable:true});}
    return reply({saved:result.saved,conflict:result.conflict,record});
   }
