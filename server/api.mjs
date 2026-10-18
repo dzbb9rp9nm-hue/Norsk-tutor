@@ -129,12 +129,12 @@ export function createAPI(env=process.env,transport=fetch){
   }
   if(route==='tutor'){
    if(!env.ANTHROPIC_API_KEY)fail(503,'The account tutor is not configured yet.');
-   const {job,scenario,messages,corrections}=body;
-   if(!job||!['message','hint','recap'].includes(job.kind)||typeof job.text!=='string'||!job.text.trim()||job.text.length>2000||!Object.hasOwn(scenarios,scenario)||!['gentle','immediate','recap'].includes(corrections)||!Array.isArray(messages)||messages.length>40||messages.length%2!==0||!messages.every((m,i)=>m&&m.role===(i%2?'assistant':'user')&&typeof m.content==='string'&&m.content.length<=20000)||job.kind==='hint'&&![1,2,3].includes(job.level))fail(400,'Invalid tutor request.');
+   const {job,scenario,messages,corrections}=body,level=body.level??'normal';
+   if(!job||!['message','hint','recap'].includes(job.kind)||typeof job.text!=='string'||!job.text.trim()||job.text.length>2000||!Object.hasOwn(scenarios,scenario)||!['gentle','immediate','recap'].includes(corrections)||!['easier','normal','stretch'].includes(level)||body.memory!==undefined&&(typeof body.memory!=='object'||body.memory===null||JSON.stringify(body.memory).length>8000)||!Array.isArray(messages)||messages.length>40||messages.length%2!==0||!messages.every((m,i)=>m&&m.role===(i%2?'assistant':'user')&&typeof m.content==='string'&&m.content.length<=20000)||job.kind==='hint'&&![1,2,3].includes(job.level))fail(400,'Invalid tutor request.');
    if(JSON.stringify(messages).length>100000)fail(413,'This conversation is too long for one request.');
    const allowed=await upstream('/rest/v1/rpc/claim_tutor_request',{method:'POST',token,body:{}});
    if(allowed!==true)fail(429,'You have reached the practice limit. Please try again later.');
-   const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:job.kind==='recap'?1400:850,system:systemPrompt(job,{scenario},{corrections}),messages:[...messages,{role:'user',content:job.text}]}),signal:AbortSignal.timeout(25000)});
+   const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:job.kind==='recap'?1400:850,system:systemPrompt(job,{scenario},{corrections,level,memory:body.memory}),messages:[...messages,{role:'user',content:job.text}]}),signal:AbortSignal.timeout(25000)});
    if(!response.ok)fail(response.status===429?429:502,'The tutor could not respond. Please try again.');
    const answer=await response.json();return reply({content:answer.content,stop_reason:answer.stop_reason});
   }

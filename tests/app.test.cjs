@@ -202,3 +202,14 @@ test('before the database update, lesson progress waits quietly and everything e
  a.api.enterAccount(ownerA,true);await tick();a.context.window.audioProgressStore.setPosition('greetings',3);a.api.state.data.phrases.push({...cloudPhrase.body});await a.api.syncAccount();
  assert.ok(phraseSaved);assert.equal(a.get('account-error').textContent,'');assert.equal(a.get('save-status').textContent,'Saved online and on this device');
 });
+test('tutor brings back past recap corrections and saved phrases, at the chosen level, with the newer model',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');draft(a,'Jeg vil kaffe.');a.context.fetch=async()=>response();await a.api.runJob({kind:'message',text:'Jeg vil kaffe.',lang:'nb'});
+ a.context.fetch=async()=>response({recap:{good:'Good.',corrections:[{original:'Jeg vil kaffe.',better:'Jeg vil gjerne ha en kaffe.',why:'Add ha.',english:'I would like a coffee.'}],next:'Order tea.'}});await a.api.runJob({kind:'recap',text:'[SESSION_RECAP]'});
+ a.api.state.data.phrases.push({id:webcrypto.randomUUID(),nb:'Takk for sist',en:'Thanks for last time',origin:''});a.api.state.prefs.level='stretch';
+ a.api.startSession('free');let sent;a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return response();};draft(a,'Hei');await a.api.runJob({kind:'message',text:'Hei',lang:'nb'});
+ assert.equal(sent.model,'claude-sonnet-5-5');assert.ok(sent.system.includes('- Jeg vil gjerne ha en kaffe. (I would like a coffee.)'));assert.ok(sent.system.includes('Takk for sist'));assert.ok(sent.system.includes('Difficulty: Stretch'));
+});
+test('a fresh learner gets no memory block and the default level',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');let sent;a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return response();};draft(a);await a.api.runJob(job);
+ assert.ok(!sent.system.includes("LEARNER'S RECENT LEARNING"));assert.ok(!sent.system.includes('Difficulty:'));assert.equal(a.api.state.prefs.level,'normal');
+});

@@ -1,7 +1,7 @@
 "use strict";
 
 const $ = id => document.getElementById(id);
-const DEFAULT_PREFS = {speed:0.9, corrections:"gentle", handsFree:false, pause:5000};
+const DEFAULT_PREFS = {speed:0.9, corrections:"gentle", handsFree:false, pause:5000, level:"normal"};
 let DATA_KEY = "nt_learning_v1";
 let cloudCursor=null;
 let account=null,cloudBase={},cloudBusy=false,cloudTimer=null,cloudEpoch=0,cloudPaused=false,cloudConflicts=[];
@@ -42,7 +42,7 @@ function setAside(key,items){
 }
 const setAsideMessage=n=>`${n===1?"One saved item":n+" saved items"} couldn't be read and ${n===1?"was":"were"} set aside. Everything else is safe. A recovery copy is available from the notebook.`;
 function safePrefs(value){
-  return {speed:[0.75,0.9,1].includes(value?.speed)?value.speed:0.9, corrections:["gentle","immediate","recap"].includes(value?.corrections)?value.corrections:"gentle",handsFree:value?.handsFree===true,pause:[3000,5000,8000].includes(value?.pause)?value.pause:5000};
+  return {speed:[0.75,0.9,1].includes(value?.speed)?value.speed:0.9, corrections:["gentle","immediate","recap"].includes(value?.corrections)?value.corrections:"gentle",handsFree:value?.handsFree===true,pause:[3000,5000,8000].includes(value?.pause)?value.pause:5000,level:["easier","normal","stretch"].includes(value?.level)?value.level:"normal"};
 }
 const prefs = safePrefs(readStored(PREFS_KEY, DEFAULT_PREFS));
 let data = readStored(DATA_KEY,{version:1,sessions:[],phrases:[],activeId:null});
@@ -268,9 +268,18 @@ function parseReply(raw,recap=false){
   if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>20||!value.parts.every(p=>p&&typeof p.t==="string"&&p.t.length<=5000&&p.t.trim()&&["nb","en"].includes(p.lang)))throw new Error("The tutor's reply was incomplete. Please try again.");
   return {parts:value.parts.map(p=>({t:p.t,lang:p.lang})),trans:typeof value.trans==="string"?value.trans:"",heard:typeof value.heard==="string"?value.heard:"",listen:value.listen==="en"?"en":"nb"};
 }
+// Corrections from the latest finished recaps and the newest saved phrases, so the tutor can bring them back.
+function learnerMemory(){
+  const corrections=[];
+  for(const session of [...data.sessions].filter(s=>s.completed&&s.id!==active?.id).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))){
+    for(const m of session.messages)if(m.kind==="recap")for(const c of m.recap.corrections)if(c.better&&!corrections.some(x=>x.better===c.better))corrections.push({better:c.better,english:c.english});
+    if(corrections.length>=6)break;
+  }
+  return cleanMemory({corrections:corrections.slice(0,6),phrases:data.phrases.slice(-6).reverse().map(p=>({nb:p.nb,en:p.en}))});
+}
 function systemPrompt(job){
   const correction={gentle:"Naturally model correct wording without interrupting the conversation.",immediate:"Briefly explain clear language errors as they occur. Match the learner's language and keep it beginner-friendly.",recap:"Do not correct mid-conversation. Save clear language corrections for the final recap."}[prefs.corrections];
-  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+(job.kind==="hint"?`The learner wants help answering your last question. This is hint level ${job.level} of 3. Level 1: give a small clue in English without the full answer. Level 2: give a Norwegian sentence starter and a short English explanation. Level 3: give one complete, simple Norwegian answer with its English meaning. Split Norwegian examples into nb parts. Return the usual parts/trans/heard/listen JSON, with heard empty and listen nb.\n`:"")+(job.kind==="recap"?`Return ONLY this JSON shape instead of the usual reply: {"recap":{"good":"One specific thing that went well, in English","corrections":[{"original":"Exact learner text","better":"Corrected Norwegian","why":"Short explanation in English","english":"English meaning of the corrected phrase"}],"next":"One concrete next practice step, in English"}}. Include zero to four corrections supported by learner messages. Never invent mistakes to fill the list.\n`:"");
+  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory())+(job.kind==="hint"?`The learner wants help answering your last question. This is hint level ${job.level} of 3. Level 1: give a small clue in English without the full answer. Level 2: give a Norwegian sentence starter and a short English explanation. Level 3: give one complete, simple Norwegian answer with its English meaning. Split Norwegian examples into nb parts. Return the usual parts/trans/heard/listen JSON, with heard empty and listen nb.\n`:"")+(job.kind==="recap"?`Return ONLY this JSON shape instead of the usual reply: {"recap":{"good":"One specific thing that went well, in English","corrections":[{"original":"Exact learner text","better":"Corrected Norwegian","why":"Short explanation in English","english":"English meaning of the corrected phrase"}],"next":"One concrete next practice step, in English"}}. Include zero to four corrections supported by learner messages. Never invent mistakes to fill the list.\n`:"");
 }
 async function runJob(job){
   if(busy||!active||active.completed)return;
@@ -284,8 +293,8 @@ async function runJob(job){
   const timeout=setTimeout(()=>request.abort(),30000);
   const alive=()=>current===epoch&&active?.id===sessionId;
   try{
-    const body={model:"claude-haiku-4-5",max_tokens:job.kind==="recap"?1400:850,system:systemPrompt(job),messages:[...active.api.slice(-40),{role:"user",content:job.text}]};
-    const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,messages:active.api.slice(-40)}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
+    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:850,system:systemPrompt(job),messages:[...active.api.slice(-40),{role:"user",content:job.text}]};
+    const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40)}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
     if(!alive())return;
     if(!response.ok)throw new Error(response.status===401?account?"Your sign-in expired. Sign in again from Account & saving. Your draft is kept.":"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
     const payload=await response.json();
@@ -343,7 +352,7 @@ function renderHistory(){
 }
 function openSettings(){
   $("browser-key-settings").hidden=!!account;$("forget-key").hidden=!!account&&!getKey();
-  stopRecognition();stopAudio();$("speech-speed").value=String(prefs.speed);$("correction-style").value=prefs.corrections;$("hands-free").checked=prefs.handsFree;$("thinking-time").value=String(prefs.pause);$("api-key").value="";$("api-key").placeholder=getKey()?"Key saved · enter a new one to replace it":"sk-ant-…";$("settings-error").textContent="";
+  stopRecognition();stopAudio();$("speech-speed").value=String(prefs.speed);$("correction-style").value=prefs.corrections;$("tutor-level").value=prefs.level;$("hands-free").checked=prefs.handsFree;$("thinking-time").value=String(prefs.pause);$("api-key").value="";$("api-key").placeholder=getKey()?"Key saved · enter a new one to replace it":"sk-ant-…";$("settings-error").textContent="";
   const hasMic=!!(window.SpeechRecognition||window.webkitSpeechRecognition),hasVoice=!!window.speechSynthesis?.getVoices().some(v=>/^(nb|no)/i.test(v.lang));
   $("connection-status").textContent=`${account?"Using your account tutor connection.":getKey()?"API key saved (not tested).":"No API key saved yet."} ${hasMic?"Speech recognition is available; microphone permission is checked when you speak.":"Speech recognition isn't available here. Typing still works."} ${hasVoice?"Norwegian playback voice found.":"No Norwegian voice detected yet; available voices depend on your device."}`;
   $("settings-dialog").showModal();
@@ -415,7 +424,7 @@ $("add-phrase").addEventListener("click",()=>openPhrase());
 $("phrase-form").addEventListener("submit",e=>{e.preventDefault();const nb=$("phrase-nb").value.trim(),en=$("phrase-en").value.trim();if(!nb)return;const exists=data.phrases.some(p=>p.nb.toLocaleLowerCase()===nb.toLocaleLowerCase());if(!exists)data.phrases.push({id:id(),nb,en,origin:phraseOrigin});const saved=save();renderNotebook();$("phrase-dialog").close();if(saved)notice(exists?"That phrase is already in your notebook.":"Phrase saved to your notebook.");});
 $("settings-form").addEventListener("submit",e=>{
   e.preventDefault();const key=$("api-key").value.trim();if(key&&!key.startsWith("sk-ant-")){$("settings-error").textContent="A Claude API key starts with sk-ant-. Please check it and try again.";return;}
-  const next=safePrefs({speed:Number($("speech-speed").value),corrections:$("correction-style").value,handsFree:$("hands-free").checked,pause:Number($("thinking-time").value)});
+  const next=safePrefs({speed:Number($("speech-speed").value),corrections:$("correction-style").value,handsFree:$("hands-free").checked,pause:Number($("thinking-time").value),level:$("tutor-level").value});
   try{if(key)localStorage.setItem("nt_key",key);localStorage.setItem(PREFS_KEY,JSON.stringify(next));Object.assign(prefs,next);$("api-key").value="";$("settings-dialog").close();notice("Preferences saved. You're ready to practise.");}
   catch{$("settings-error").textContent="This browser couldn't save your preferences. Check that browser storage is allowed.";}
 });

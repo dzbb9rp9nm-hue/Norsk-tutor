@@ -6,6 +6,9 @@ A personal Norwegian Bokmål practice app for a beginner. Hosted as static files
 
 ## This release
 
+- **Tutor model:** Claude Sonnet 5.5 (`claude-sonnet-5-5`), set in `app.js` and `server/api.mjs` (was Claude Haiku 4.5 until 18 October 2026).
+- **The tutor remembers recent learning:** each request includes up to six corrected forms from the latest finished recaps and the six newest notebook phrases. The tutor is asked to create one or two natural chances to use them, without quizzing or listing them. Built in `learnerMemory()` (app.js) and `tutorExtras()` (tutor-prompt.js); the server re-cleans and size-limits them.
+- **How challenging:** Settings has Easier / Just right / Stretch me. Stored with the other device preferences (`level`).
 - Each listening lesson also has a four-turn guided conversation: partner speech, an English response cue, an untimed answer pause, optional hint, model answer, and self-assessment. “Practise again” replies form a targeted review within that lesson. Ratings and positions are device-local, not account synced; speech is not recorded or automatically assessed.
 - Four original **Listen & repeat** lessons: making plans, your day, travel changes, and opinions. English prompts, Bokmål examples, timed speaking pauses, recall rounds, replay, speed and pause controls, and transcripts. Playback uses device voices; a Norwegian voice is required. The app pauses playback when hidden. Lesson positions stay on the current device and are not part of account sync or learning backups. No recording or pronunciation scoring.
 - 24 guided situations across food, travel, daily life, and social conversation, plus free conversation. Search and filter by topic.
@@ -71,7 +74,11 @@ Netlify currently publishes `main`. This app remains static. `netlify.toml` runs
 
 See `ROADMAP.md` for the remaining approved improvements.
 
-## Current state (5 October 2026)
+## Current state (18 October 2026)
+
+- 18 October: Sonnet 5.5 tutor, recent-learning memory, difficulty setting, Listen & repeat sync and the Supabase daily check-in merged to `main`. Listen & repeat sync starts once `database/003_audio_and_change_times.sql` has been run in Supabase.
+
+### Earlier (5 October 2026)
 
 - **Live:** Netlify publishes automatically from `main` on the public GitHub repository. Pushing to `main` publishes, so push only what is ready to go live.
 - **Accounts are active.** Email-and-password sign-in, online learning sync and the server-held tutor key have been in use since 19 September (confirmed by the owner on Mac and phone). Public signup stays disabled. See `ACCOUNT-RELEASE.md`.
