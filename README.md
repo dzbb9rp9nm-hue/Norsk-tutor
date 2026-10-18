@@ -76,7 +76,7 @@ See `ROADMAP.md` for the remaining approved improvements.
 
 ## Current state (18 October 2026)
 
-- 18 October: Sonnet 5.5 tutor, recent-learning memory, difficulty setting, Listen & repeat sync and the Supabase daily check-in merged to `main`. Listen & repeat sync starts once `database/003_audio_and_change_times.sql` has been run in Supabase.
+- 18 October: Sonnet 5.5 tutor, recent-learning memory, difficulty setting, Listen & repeat sync and the Supabase daily check-in merged to `main`. Migration 003 was run in Supabase the same day, so Listen & repeat sync is on.
 
 ### Earlier (5 October 2026)
 
