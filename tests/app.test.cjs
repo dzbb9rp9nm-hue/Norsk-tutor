@@ -10,8 +10,8 @@ function app(stored={}){
  const elements=new Map(),store=new Map(Object.entries(stored));const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
  const timers=new Map();let timerId=0;const spoken=[];let latestRecognition;
  class Recognition {constructor(){latestRecognition=this}start(){}stop(){this.onend?.()}abort(){this.onend?.()}}
- const context=vm.createContext({console,crypto:webcrypto,AbortController,AbortSignal,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
- vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
+ const context=vm.createContext({console,crypto:webcrypto,TextDecoder,TextEncoder,AbortController,AbortSignal,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
+ vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
  return {context,api:context.testing,get,store,timers,spoken,recognition:()=>latestRecognition};
 }
 const reply={parts:[{t:'Vil du ha melk?',lang:'nb'}],trans:'Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
@@ -207,9 +207,71 @@ test('tutor brings back past recap corrections and saved phrases, at the chosen 
  a.context.fetch=async()=>response({recap:{good:'Good.',corrections:[{original:'Jeg vil kaffe.',better:'Jeg vil gjerne ha en kaffe.',why:'Add ha.',english:'I would like a coffee.'}],next:'Order tea.'}});await a.api.runJob({kind:'recap',text:'[SESSION_RECAP]'});
  a.api.state.data.phrases.push({id:webcrypto.randomUUID(),nb:'Takk for sist',en:'Thanks for last time',origin:''});a.api.state.prefs.level='stretch';
  a.api.startSession('free');let sent;a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return response();};draft(a,'Hei');await a.api.runJob({kind:'message',text:'Hei',lang:'nb'});
- assert.equal(sent.model,'claude-sonnet-5-5');assert.ok(sent.system.includes('- Jeg vil gjerne ha en kaffe. (I would like a coffee.)'));assert.ok(sent.system.includes('Takk for sist'));assert.ok(sent.system.includes('Difficulty: Stretch'));
+ assert.equal(sent.model,'claude-sonnet-5-5');assert.ok(sent.system.map(b=>b.text).join('\n').includes('- Jeg vil gjerne ha en kaffe. (I would like a coffee.)'));assert.ok(sent.system.map(b=>b.text).join('\n').includes('Takk for sist'));assert.ok(sent.system.map(b=>b.text).join('\n').includes('Difficulty: Stretch'));
 });
 test('a fresh learner gets no memory block and the default level',async()=>{
  const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');let sent;a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return response();};draft(a);await a.api.runJob(job);
- assert.ok(!sent.system.includes("LEARNER'S RECENT LEARNING"));assert.ok(!sent.system.includes('Difficulty:'));assert.equal(a.api.state.prefs.level,'normal');
+ assert.ok(!sent.system.map(b=>b.text).join('\n').includes("LEARNER'S RECENT LEARNING"));assert.ok(!sent.system.map(b=>b.text).join('\n').includes('Difficulty:'));assert.equal(a.api.state.prefs.level,'normal');
+});
+
+// ---- Streaming replies (25 October 2026) ----
+// Builds a streamed reply whose chunks are released one at a time by calling next().
+function streamed(text,{chunks=4,stop='end_turn',error=false}={}){
+ const events=[{type:'message_start',message:{usage:{}}},{type:'content_block_start',index:0,content_block:{type:'text',text:''}}];
+ const size=Math.ceil(text.length/chunks);for(let i=0;i<text.length;i+=size)events.push({type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(i,i+size)}});
+ if(error)events.push({type:'error',error:{type:'overloaded_error'}});
+ else events.push({type:'content_block_stop',index:0},{type:'message_delta',delta:{stop_reason:stop}},{type:'message_stop'});
+ const bytes=events.map(e=>new TextEncoder().encode(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`));
+ const waiting=[];let released=0,pending=null;
+ const reader={read(){if(released<bytes.length&&released<limit)return Promise.resolve({done:false,value:bytes[released++]});if(released>=bytes.length)return Promise.resolve({done:true,value:undefined});return new Promise(r=>pending=r);}};
+ let limit=Infinity;
+ const control={hold(n){limit=n;return control;},release(){limit=Infinity;if(pending){const r=pending;pending=null;r(released<bytes.length?{done:false,value:bytes[released++]}:{done:true,value:undefined});}}};
+ return {response:{ok:true,headers:{get:k=>k==='content-type'?'text/event-stream':null},body:{getReader:()=>reader}},control};
+}
+const flush=()=>new Promise(r=>setImmediate(r));
+
+test('streamed reply starts speaking the first part before the rest arrives, then commits once',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');a.api.state.prefs.handsFree=true;draft(a);
+ const value={parts:[{t:'Hei! Vil du ha "melk"?',lang:'nb'},{t:'Milk means melk.',lang:'en'}],trans:'Hi! Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
+ const text=JSON.stringify(value),cut=text.indexOf('{"t":"Milk');
+ const s=streamed(text,{chunks:text.length});s.control.hold(2+cut+3);// up to just past the first part
+ let sent;a.context.fetch=async(_,options)=>{sent=JSON.parse(options.body);return s.response;};
+ const pending=a.api.runJob(job);await flush();await flush();
+ const voiced=()=>a.spoken.filter(u=>u.volume!==0);
+ assert.equal(voiced().length,1);assert.equal(voiced()[0].text,'Hei! Vil du ha "melk"?');assert.equal(voiced()[0].lang,'nb-NO');
+ assert.equal(a.api.state.active.api.length,2);// nothing committed mid-stream (2 = opening exchange)
+ s.control.release();await pending;
+ assert.equal(a.api.state.active.api.length,4);assert.equal(a.api.state.active.messages.at(-1).parts.length,2);
+ voiced()[0].onend();assert.equal(voiced().length,2);assert.equal(voiced()[1].lang,'en-GB');
+ assert.equal([...a.timers.values()].filter(t=>t.delay===500).length,0);
+ voiced()[1].onend();assert.equal([...a.timers.values()].filter(t=>t.delay===500).length,1);// hands-free listens after the last part
+ assert.equal(voiced().length,2);// nothing spoken twice
+ assert.equal(sent.stream,true);assert.equal(sent.system[0].cache_control.type,'ephemeral');assert.equal(sent.messages.at(-1).content[0].cache_control.type,'ephemeral');assert.equal(sent.messages.at(-1).content[0].text,job.text);
+});
+test('streamed error or cut-off reply commits nothing, stops speech and offers retry',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');draft(a);
+ a.context.fetch=async()=>streamed(JSON.stringify(reply),{error:true}).response;await a.api.runJob(job);
+ assert.equal(a.api.state.active.api.length,2);assert.ok(a.api.state.retryJob);assert.match(a.get('retry-message').textContent,/busy/);
+ a.context.fetch=async()=>streamed(JSON.stringify(reply),{stop:'max_tokens'}).response;await a.api.runJob(job);
+ assert.equal(a.api.state.active.api.length,2);assert.match(a.get('retry-message').textContent,/cut short/);
+ a.context.fetch=async()=>streamed(JSON.stringify(reply)).response;await a.api.runJob(job);
+ assert.equal(a.api.state.active.api.length,4);assert.equal(a.api.state.active.messages.filter(m=>m.kind==='user').length,1);
+});
+test('streamed recap is not spoken and a stream in the background stays silent',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');a.context.fetch=async()=>streamed(JSON.stringify(reply)).response;await a.api.runJob(job);
+ const before=a.spoken.filter(u=>u.volume!==0).length;
+ a.context.fetch=async()=>streamed(JSON.stringify({recap:{good:'Good.',corrections:[],next:'More.'}})).response;await a.api.runJob({kind:'recap',text:'[SESSION_RECAP]'});
+ assert.equal(a.spoken.filter(u=>u.volume!==0).length,before);assert.equal(a.api.state.active.completed,true);
+ const b=app({'nt_key':'sk-ant-test'});b.api.startSession('cafe');const s=streamed(JSON.stringify(reply));s.control.hold(1);b.context.fetch=async()=>s.response;
+ const pending=b.api.runJob(job);await flush();b.api.showView('history');s.control.release();await pending;
+ assert.equal(b.spoken.filter(u=>u.volume!==0).length,0);
+});
+test('partial reply parser returns only complete, valid parts',()=>{
+ const a=app();const p=a.api.streamedParts;
+ assert.deepEqual(JSON.parse(JSON.stringify(p('{"parts":[{"t":"Hei","lang":"nb"},{"t":"Hal'))),[{t:'Hei',lang:'nb'}]);
+ assert.equal(p('{"parts":[{"t":"Brace } and \\" quote","lang":"nb"}').length,1);
+ assert.equal(p('```json\n{"parts":[{"t":"A","lang":"nb"},{"t":"B","lang":"en"}],"trans":""}').length,2);
+ assert.equal(p('{"parts":[{"t":"","lang":"nb"},{"t":"B","lang":"en"}]').length,0);
+ assert.equal(p('{"recap":{"good":"x"}}').length,0);
+ assert.equal(p('Sure! {"parts":[{"t":"A","lang":"nb"}]').length,0);
 });

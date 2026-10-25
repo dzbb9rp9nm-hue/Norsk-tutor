@@ -2,6 +2,7 @@ import {randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
 import learning from '../learning.js';
 import scenarios from '../scenarios.js';
 import systemPrompt from './prompt.cjs';
+import tutorPrompt from '../tutor-prompt.js';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION='__Host-nt_session';
 const SIGN_IN_DAYS=30;
@@ -134,8 +135,13 @@ export function createAPI(env=process.env,transport=fetch){
    if(JSON.stringify(messages).length>100000)fail(413,'This conversation is too long for one request.');
    const allowed=await upstream('/rest/v1/rpc/claim_tutor_request',{method:'POST',token,body:{}});
    if(allowed!==true)fail(429,'You have reached the practice limit. Please try again later.');
-   const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:job.kind==='recap'?1400:850,system:systemPrompt(job,{scenario},{corrections,level,memory:body.memory}),messages:[...messages,{role:'user',content:job.text}]}),signal:AbortSignal.timeout(25000)});
+   // stream:true (sent by current app versions) passes the reply through as it is written, so the
+   // app can start speaking the first sentence early. Older app versions get one JSON reply.
+   const stream=body.stream===true;
+   const request=tutorPrompt.cachedRequest(systemPrompt({scenario},{corrections,level,memory:body.memory}),tutorPrompt.jobRules(job),[...messages,{role:'user',content:job.text}]);
+   const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:job.kind==='recap'?1400:850,...request,...(stream?{stream:true}:{})}),signal:AbortSignal.timeout(25000)});
    if(!response.ok)fail(response.status===429?429:502,'The tutor could not respond. Please try again.');
+   if(stream&&response.body){const headers=new Headers({'content-type':'text/event-stream','cache-control':'no-store','x-content-type-options':'nosniff'});for(const c of ctx.cookies)headers.append('set-cookie',c);return new Response(response.body,{status:200,headers});}
    const answer=await response.json();return reply({content:answer.content,stop_reason:answer.stop_reason});
   }
   fail(404,'Unknown request.');

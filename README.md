@@ -6,6 +6,7 @@ A personal Norwegian Bokmål practice app for a beginner. Hosted as static files
 
 ## This release
 
+- **Faster replies (25 October 2026):** tutor replies stream in, and the app starts speaking each sentence as soon as it has fully arrived instead of waiting for the whole reply. The reply is still validated in full before it is saved; if it fails, speech stops and Retry is offered. Requests use prompt caching (the session rules and the conversation so far are marked `cache_control`), so Anthropic can reuse them on the next turn. Hint and recap instructions are sent as a separate block (`jobRules()` in tutor-prompt.js). The server streams only when the app sends `stream: true`; older app versions still get one JSON reply.
 - **Tutor model:** Claude Sonnet 5.5 (`claude-sonnet-5-5`), set in `app.js` and `server/api.mjs` (was Claude Haiku 4.5 until 18 October 2026).
 - **The tutor remembers recent learning:** each request includes up to six corrected forms from the latest finished recaps and the six newest notebook phrases. The tutor is asked to create one or two natural chances to use them, without quizzing or listing them. Built in `learnerMemory()` (app.js) and `tutorExtras()` (tutor-prompt.js); the server re-cleans and size-limits them.
 - **How challenging:** Settings has Easier / Just right / Stretch me. Stored with the other device preferences (`level`).

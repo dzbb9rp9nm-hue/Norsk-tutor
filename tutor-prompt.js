@@ -42,4 +42,18 @@ function tutorExtras(level,memory){
   return text;
 }
 
-if(typeof module!=="undefined")module.exports={SYSTEM_PROMPT,TUTOR_LEVELS,cleanMemory,tutorExtras};
+// Extra instructions for hint and recap requests. Kept separate from the session rules so the
+// session rules can be cached by Anthropic and reused across turns.
+function jobRules(job){
+  return (job.kind==="hint"?`The learner wants help answering your last question. This is hint level ${job.level} of 3. Level 1: give a small clue in English without the full answer. Level 2: give a Norwegian sentence starter and a short English explanation. Level 3: give one complete, simple Norwegian answer with its English meaning. Split Norwegian examples into nb parts. Return the usual parts/trans/heard/listen JSON, with heard empty and listen nb.\n`:"")+(job.kind==="recap"?`Return ONLY this JSON shape instead of the usual reply: {"recap":{"good":"One specific thing that went well, in English","corrections":[{"original":"Exact learner text","better":"Corrected Norwegian","why":"Short explanation in English","english":"English meaning of the corrected phrase"}],"next":"One concrete next practice step, in English"}}. Include zero to four corrections supported by learner messages. Never invent mistakes to fill the list.\n`:"");
+}
+// Request parts with prompt caching: the session rules and the conversation so far are marked so
+// Anthropic can reuse them on the next turn instead of re-reading them (faster and cheaper).
+function cachedRequest(stable,extra,messages){
+  const system=[{type:"text",text:stable,cache_control:{type:"ephemeral"}}];
+  if(extra)system.push({type:"text",text:extra});
+  const last=messages.length-1;
+  return {system,messages:messages.map((m,i)=>i===last?{role:m.role,content:[{type:"text",text:m.content,cache_control:{type:"ephemeral"}}]}:{role:m.role,content:m.content})};
+}
+
+if(typeof module!=="undefined")module.exports={SYSTEM_PROMPT,TUTOR_LEVELS,cleanMemory,tutorExtras,jobRules,cachedRequest};

@@ -218,6 +218,87 @@ function warmSpeech(){
     try{window.speechSynthesis.speak(warm);}catch{}
   }
 }
+// Speaks reply parts as they arrive while the reply is still streaming in.
+function speechStream(rate=prefs.speed){
+  const ok=!!(window.speechSynthesis&&window.SpeechSynthesisUtterance),queue=[];
+  stopRecognition();stopAudio();
+  const current=speechId;let playing=false,ended=false,done=null,pushed=0;
+  const finish=()=>{speaking=false;controls();setStatus("Your turn. Take your time.");if(done)done();};
+  const next=()=>{
+    if(current!==speechId)return;
+    if(!queue.length){playing=false;if(ended)finish();return;}
+    playing=true;
+    const part=queue.shift(),u=new SpeechSynthesisUtterance(part.t);
+    u.lang=part.lang==="en"?"en-GB":"nb-NO";u.rate=rate;
+    const voices=window.speechSynthesis.getVoices();
+    const voice=voices.find(v=>part.lang==="en"?/^en-GB/i.test(v.lang):/^(nb|no)/i.test(v.lang))||voices.find(v=>part.lang==="en"?/^en/i.test(v.lang):false);
+    if(voice)u.voice=voice;
+    u.onend=next;
+    u.onerror=()=>{if(current!==speechId)return;stopAudio();setStatus("Playback stopped. Try Listen again, or continue by typing.");};
+    window.speechSynthesis.speak(u);
+  };
+  return {
+    get started(){return pushed>0;},
+    // Accepts the full list of parts found so far; only new ones are queued.
+    update(parts){
+      if(!ok||current!==speechId||ended)return;
+      for(;pushed<parts.length;pushed++){
+        if(pushed===0){speaking=true;controls();setStatus("Tutor is speaking. Use Stop playback to pause.");}
+        queue.push(parts[pushed]);
+      }
+      if(!playing&&queue.length)next();
+    },
+    end(parts,onDone){
+      if(current!==speechId){setStatus("Your reply is ready. Tap Listen again when you want to hear it.");return;}
+      this.update(parts);ended=true;done=onDone;
+      if(!playing)finish();
+    }
+  };
+}
+// Finds the reply parts that have fully arrived in a partly streamed reply, in order.
+function streamedParts(text){
+  const found=/^\s*(?:```(?:json)?\s*)?\{\s*"parts"\s*:\s*\[/i.exec(text);if(!found)return [];
+  const out=[];let depth=0,start=-1,inString=false,escaped=false;
+  for(let i=found[0].length;i<text.length;i++){
+    const c=text[i];
+    if(inString){if(escaped)escaped=false;else if(c==="\\")escaped=true;else if(c==='"')inString=false;continue;}
+    if(c==='"')inString=true;
+    else if(c==="{"){if(depth===0)start=i;depth++;}
+    else if(c==="}"){
+      if(--depth<0)return out;
+      if(depth===0){
+        let part;try{part=JSON.parse(text.slice(start,i+1));}catch{return out;}
+        if(!part||typeof part.t!=="string"||!part.t.trim()||!["nb","en"].includes(part.lang))return out;
+        out.push({t:part.t,lang:part.lang});
+      }
+    }
+    else if(c==="]"&&depth===0)break;
+  }
+  return out;
+}
+// Reads an Anthropic streamed reply (server-sent events). onText receives the text so far.
+async function readStream(response,onText){
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  let buffer="",text="",stop="";
+  const handle=line=>{
+    if(!line.startsWith("data:"))return;
+    let event;try{event=JSON.parse(line.slice(5));}catch{return;}
+    if(event.type==="content_block_delta"&&event.delta?.type==="text_delta"&&typeof event.delta.text==="string"){
+      text+=event.delta.text;
+      if(text.length>60000)throw new Error("The reply was too large. Please try again.");
+      onText(text);
+    }else if(event.type==="message_delta"&&event.delta?.stop_reason)stop=event.delta.stop_reason;
+    else if(event.type==="error")throw new Error(event.error?.type==="overloaded_error"?"The tutor is very busy right now. Please try again in a moment.":"The tutor couldn't respond right now. Please try again.");
+  };
+  for(;;){
+    const {done,value}=await reader.read();
+    if(value)buffer+=decoder.decode(value,{stream:true});
+    let n;while((n=buffer.indexOf("\n"))>=0){const line=buffer.slice(0,n).replace(/\r$/,"");buffer=buffer.slice(n+1);handle(line);}
+    if(done){handle(buffer.trim());break;}
+  }
+  return {text,stop};
+}
+function canSpeakReply(){return view==="practice"&&!document.hidden&&!$("settings-dialog").open&&!$("phrase-dialog").open;}
 function startListening(){
   if(busy||listening||!active||active.completed)return;
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -277,9 +358,9 @@ function learnerMemory(){
   }
   return cleanMemory({corrections:corrections.slice(0,6),phrases:data.phrases.slice(-6).reverse().map(p=>({nb:p.nb,en:p.en}))});
 }
-function systemPrompt(job){
+function systemPrompt(){
   const correction={gentle:"Naturally model correct wording without interrupting the conversation.",immediate:"Briefly explain clear language errors as they occur. Match the learner's language and keep it beginner-friendly.",recap:"Do not correct mid-conversation. Save clear language corrections for the final recap."}[prefs.corrections];
-  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory())+(job.kind==="hint"?`The learner wants help answering your last question. This is hint level ${job.level} of 3. Level 1: give a small clue in English without the full answer. Level 2: give a Norwegian sentence starter and a short English explanation. Level 3: give one complete, simple Norwegian answer with its English meaning. Split Norwegian examples into nb parts. Return the usual parts/trans/heard/listen JSON, with heard empty and listen nb.\n`:"")+(job.kind==="recap"?`Return ONLY this JSON shape instead of the usual reply: {"recap":{"good":"One specific thing that went well, in English","corrections":[{"original":"Exact learner text","better":"Corrected Norwegian","why":"Short explanation in English","english":"English meaning of the corrected phrase"}],"next":"One concrete next practice step, in English"}}. Include zero to four corrections supported by learner messages. Never invent mistakes to fill the list.\n`:"");
+  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory());
 }
 async function runJob(job){
   if(busy||!active||active.completed)return;
@@ -292,15 +373,23 @@ async function runJob(job){
   setStatus(job.kind==="recap"?"Preparing your recap…":job.kind==="hint"?"Finding a little help…":"Tutor is thinking…");
   const timeout=setTimeout(()=>request.abort(),30000);
   const alive=()=>current===epoch&&active?.id===sessionId;
+  let speech=null;
   try{
-    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:850,system:systemPrompt(job),messages:[...active.api.slice(-40),{role:"user",content:job.text}]};
-    const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40)}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
+    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:850,stream:true,...cachedRequest(systemPrompt(),jobRules(job),[...active.api.slice(-40),{role:"user",content:job.text}])};
+    const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40),stream:true}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
     if(!alive())return;
     if(!response.ok)throw new Error(response.status===401?account?"Your sign-in expired. Sign in again from Account & saving. Your draft is kept.":"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
-    const payload=await response.json();
+    let raw,stop;
+    if(typeof response.body?.getReader==="function"&&/event-stream/i.test(response.headers?.get?.("content-type")||"")){
+      // Streamed reply: start speaking each sentence as soon as it has fully arrived.
+      speech=job.kind!=="recap"&&canSpeakReply()?speechStream():null;
+      ({text:raw,stop}=await readStream(response,text=>{if(speech&&alive())speech.update(streamedParts(text));}));
+    }else{
+      const payload=await response.json();
+      raw=(payload.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");stop=payload.stop_reason;
+    }
     if(!alive())return;
-    if(payload.stop_reason==="max_tokens")throw new Error("The reply was cut short. Please try again.");
-    const raw=(payload.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");
+    if(stop==="max_tokens")throw new Error("The reply was cut short. Please try again.");
     const result=parseReply(raw,job.kind==="recap");
     // Only commit a turn after a complete, validated reply. Retries do not duplicate the conversation.
     active.api.push({role:"user",content:job.text},{role:"assistant",content:JSON.stringify(result)});
@@ -314,12 +403,15 @@ async function runJob(job){
     else active.inputLanguage=result.listen==="en"?"en-GB":"nb-NO";
     busy=false;controller=null;touch();renderLesson();
     if(view==="history")renderHistory();
-    if(job.kind!=="recap"&&view==="practice"&&!document.hidden&&!$("settings-dialog").open&&!$("phrase-dialog").open)speakParts(result.parts,()=>{
-      if(prefs.handsFree&&job.kind==="message"&&alive()&&view==="practice"&&!document.hidden&&!$("settings-dialog").open&&!$("phrase-dialog").open)autoTimer=setTimeout(()=>{if(alive()&&view==="practice")startListening();},500);
-    });
+    const afterSpeaking=()=>{
+      if(prefs.handsFree&&job.kind==="message"&&alive()&&canSpeakReply())autoTimer=setTimeout(()=>{if(alive()&&view==="practice")startListening();},500);
+    };
+    if(job.kind!=="recap"&&canSpeakReply()){if(speech?.started)speech.end(result.parts,afterSpeaking);else speakParts(result.parts,afterSpeaking);}
+    else if(speech?.started){stopAudio();setStatus("Your reply is ready. Tap Listen again when you want to hear it.");}
     else setStatus(job.kind==="recap"?"Your recap is ready.":"Your reply is ready. Tap Listen again when you want to hear it.");
   }catch(error){
     if(!alive())return;
+    if(speech?.started)stopAudio();
     retryJob=job;$("retry-message").textContent=error.name==="AbortError"?"The tutor took too long. Your words are safe; try again.":error instanceof TypeError?"Couldn't reach the tutor. Check your connection and try again.":error.message;
     setStatus("Your words are kept. You can retry or edit your message.");
   }finally{clearTimeout(timeout);if(alive()){busy=false;controller=null;controls();}}
