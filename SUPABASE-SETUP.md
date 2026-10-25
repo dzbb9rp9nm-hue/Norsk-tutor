@@ -43,3 +43,5 @@ Source: https://supabase.com/docs/guides/auth/auth-smtp
 - Owner checked `claim_tutor_request`: absent before installation.
 - Owner ran `database/002_tutor_limits.sql` and reported “Success. No rows returned.” Do not rerun this migration.
 - Next: use **Send password recovery** for the existing user to set a Norsk Tutor password; then hosting configuration and live verification.
+
+- 25 October 2026: owner ran `database/004_daily_review.sql` (daily review schedule and practice days in the progress record); the check `daily_review_enabled` returned true.
