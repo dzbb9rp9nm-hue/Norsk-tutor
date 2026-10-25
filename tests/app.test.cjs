@@ -11,7 +11,7 @@ function app(stored={}){
  const timers=new Map();let timerId=0;const spoken=[];let latestRecognition;
  class Recognition {constructor(){latestRecognition=this}start(){}stop(){this.onend?.()}abort(){this.onend?.()}}
  const context=vm.createContext({console,crypto:webcrypto,TextDecoder,TextEncoder,AbortController,AbortSignal,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
- vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
+ vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,startToday,revealReview,rateReview,leaveReview,renderToday,dueReview,reviewItems,dayNumber,dayKey,get review(){return review},renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
  return {context,api:context.testing,get,store,timers,spoken,recognition:()=>latestRecognition};
 }
 const reply={parts:[{t:'Vil du ha melk?',lang:'nb'}],trans:'Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
@@ -76,7 +76,7 @@ test('learning export contains sessions and phrases but excludes saved credentia
 });
 
 test('all 24 guided situations have valid beginner openings and survive reload',()=>{
- const a=app();const guided=Object.keys(a.api.SCENARIOS).filter(k=>k!=='free');assert.equal(guided.length,24);
+ const a=app();const guided=Object.keys(a.api.SCENARIOS).filter(k=>k!=='free'&&!a.api.SCENARIOS[k].hidden);assert.equal(guided.length,24);
  for(const key of guided){const s=a.api.SCENARIOS[key];assert.ok(s.category);assert.equal(s.phrases.length,3);assert.ok(s.phrases.every(p=>p.length===2&&p.every(t=>typeof t==='string'&&t.length>0)));a.api.startSession(key);assert.ok(a.api.validData(a.api.state.data));}
  const b=app(Object.fromEntries(a.store));assert.equal(b.api.state.data.sessions.length,24);assert.equal(b.api.state.active.scenario,'haircut');
 });
@@ -274,4 +274,75 @@ test('partial reply parser returns only complete, valid parts',()=>{
  assert.equal(p('{"parts":[{"t":"","lang":"nb"},{"t":"B","lang":"en"}]').length,0);
  assert.equal(p('{"recap":{"good":"x"}}').length,0);
  assert.equal(p('Sure! {"parts":[{"t":"A","lang":"nb"}]').length,0);
+});
+
+// ---- Today practice (25 October 2026) ----
+function withPhrases(a,list){for(const [nb,en] of list)a.api.state.data.phrases.push({id:a.context.crypto.randomUUID(),nb,en,origin:'Test'});a.api.save();}
+test('Today card counts due phrases; review speaks, schedules, retries once and marks the day',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});withPhrases(a,[['Takk for sist','Thanks for last time'],['Jeg er sulten','I am hungry']]);
+ a.api.renderToday();assert.equal(a.get('today-title').textContent,'2 phrases to review');assert.match(a.get('today-streak').textContent,/start a streak/);
+ a.api.startToday();assert.ok(a.api.review);assert.equal(a.get('welcome').hidden,true);assert.equal(a.get('review').hidden,false);
+ const first=a.api.review.queue[0];assert.equal(a.get('review-prompt').textContent,first.en);assert.equal(a.get('review-answer').hidden,true);
+ a.api.rateReview(true);assert.equal(a.api.review.pos,0);// can't rate before revealing
+ a.api.revealReview();assert.equal(a.spoken.filter(u=>u.volume!==0).at(-1).text,first.nb);assert.equal(a.get('review-answer').hidden,false);
+ a.api.rateReview(true);
+ const today=a.api.dayNumber();assert.deepEqual(JSON.parse(JSON.stringify(a.api.state.data.audio.review[first.key].v)),{b:1,d:today+1});
+ a.api.revealReview();const second=a.api.review.queue[1];a.api.rateReview(false);
+ assert.equal(a.api.review.queue.length,3);assert.equal(a.api.review.queue[2].key,second.key);// one more try at the end
+ assert.equal(a.api.state.data.audio.days,undefined);
+ a.api.revealReview();a.api.rateReview(false);assert.equal(a.api.review.queue.length,3);// not re-queued twice
+ assert.equal(a.get('review-done').hidden,false);assert.match(a.get('review-done-text').textContent,/reviewed 2 phrases \(1 will come back tomorrow\)/);
+ assert.equal(a.api.state.data.audio.days[a.api.dayKey()].v,1);assert.ok(a.api.validData(a.api.state.data));
+ // Nothing due now; the card says so and the streak has started.
+ a.api.leaveReview();assert.equal(a.get('today-title').textContent,'Review done for today ✓');assert.match(a.get('today-streak').textContent,/^1-day streak · 1 day practised this month$/);
+ // Survives reload.
+ const b=app(Object.fromEntries(a.store));assert.equal(b.api.dueReview(b.api.state.data).length,0);assert.equal(b.api.state.data.audio.review[second.key].v.b,0);
+});
+test("Today's conversation brings in the phrases reviewed that day and asks the tutor to use each one",async()=>{
+ const a=app({'nt_key':'sk-ant-test'});withPhrases(a,[['Ikke reviewed','Not reviewed'],['Takk for sist','Thanks for last time'],['Jeg er sulten','I am hungry']]);
+ // Newest first: review only the two newest, so the oldest is not part of today's focus.
+ a.api.startToday();a.api.review.queue.length=2;a.api.revealReview();a.api.rateReview(true);a.api.revealReview();a.api.rateReview(true);
+ a.get('review-conversation').events.click();
+ assert.equal(a.api.review,null);assert.equal(a.api.state.active.scenario,'today');assert.equal(a.get('lesson').hidden,false);
+ let sent;a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return response();};draft(a,'Hei');await a.api.runJob({kind:'message',text:'Hei',lang:'nb'});
+ const system=sent.system.map(b=>b.text).join('\n');
+ assert.ok(system.includes('Takk for sist (Thanks for last time)'));assert.ok(system.includes('Jeg er sulten'));assert.ok(!system.includes('Ikke reviewed'));
+ assert.ok(system.includes('give them a natural chance to use each one'));
+ // An ordinary conversation still uses the gentler "one or two chances" instruction.
+ a.api.startSession('cafe');draft(a,'Hei');await a.api.runJob({kind:'message',text:'Hei',lang:'nb'});
+ assert.ok(sent.system.map(b=>b.text).join('\n').includes('one or two chances'));
+ assert.ok(!Object.keys(a.api.SCENARIOS).filter(k=>a.api.SCENARIOS[k].hidden).some(k=>JSON.stringify(a.get('scenario-grid').children).includes(a.api.SCENARIOS[k].title)));
+});
+test('with nothing saved, Today goes straight to a conversation; sending a message counts as practice',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.renderToday();assert.equal(a.get('today-start').textContent,"Start today's conversation →");
+ a.api.startToday();assert.equal(a.api.review,null);assert.equal(a.api.state.active.scenario,'today');
+ a.context.fetch=async()=>response();draft(a);await a.api.runJob(job);assert.equal(a.api.state.data.audio.days[a.api.dayKey()].v,1);
+});
+test('daily review picks due items oldest first, at most five new ones, ten in all, with no duplicates',()=>{
+ const L=require('../learning.js');const today=20000,data={version:1,phrases:[],sessions:[],audio:{progress:{},ratings:{},review:{}}};
+ const uid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+ for(let i=0;i<14;i++)data.phrases.push({id:uid(i),nb:'Setning '+i,en:'Sentence '+i,origin:''});
+ data.phrases.push({id:uid(99),nb:'setning 3!',en:'dup',origin:''});// same phrase, different case and punctuation
+ data.audio.review['p:'+uid(0)]={v:{b:2,d:today-1},at:1};data.audio.review['p:'+uid(1)]={v:{b:1,d:today-5},at:1};data.audio.review['p:'+uid(2)]={v:{b:3,d:today+3},at:1};
+ const due=L.dueReview(data,today);
+ assert.deepEqual(due.slice(0,2).map(i=>i.key),['p:'+uid(1),'p:'+uid(0)]);
+ assert.equal(due.length,7);assert.ok(!due.some(i=>i.key==='p:'+uid(2)));assert.equal(new Set(due.map(i=>L.normalPhrase(i.nb))).size,7);
+ assert.equal(L.reviewItems(data).length,14);
+ for(let i=3;i<14;i++)data.audio.review['p:'+uid(i)]={v:{b:1,d:today},at:1};
+ assert.equal(L.dueReview(data,today).length,10);
+ // Corrections from finished recaps are included, keyed by their text.
+ const s={id:uid(500),scenario:'cafe',createdAt:'2026-10-01T10:00:00Z',updatedAt:'2026-10-01T10:00:00Z',completed:true,draft:'',api:[],messages:[{kind:'recap',recap:{good:'g',next:'n',corrections:[{original:'Jeg vil kaffe',better:'Jeg vil gjerne ha en kaffe.',why:'w',english:'I would like a coffee.'}]}}]};
+ const d2={...data,phrases:[],sessions:[s]};assert.deepEqual(L.reviewItems(d2).map(i=>i.key),[L.textKey('jeg vil gjerne ha en kaffe')]);
+ assert.deepEqual(L.nextReview({b:6,d:0},true,today),{b:7,d:today+60});assert.deepEqual(L.nextReview({b:7,d:0},true,today),{b:7,d:today+60});
+});
+test('review schedule and practice days are validated, merged newest-first, and omitted while empty',()=>{
+ const L=require('../learning.js');
+ assert.ok(L.validAudio({progress:{},ratings:{},review:{'p:x':{v:{b:1,d:5},at:2}},days:{'2026-10-25':{v:1,at:3}}}));
+ assert.ok(!L.validAudio({progress:{},ratings:{},review:{'p:x':{v:{b:-1,d:5},at:2}}}));
+ assert.ok(!L.validAudio({progress:{},ratings:{},review:{'p:x':{v:{b:1,d:5,extra:1},at:2}}}));
+ assert.ok(!L.validAudio({progress:{},ratings:{},days:{'2026-10-25':{v:2,at:3}}}));
+ assert.deepEqual(L.normalizeAudio({progress:{},ratings:{},review:{},days:{}}),{progress:{},ratings:{}});
+ const m=L.mergeAudio({progress:{},ratings:{},review:{a:{v:{b:1,d:1},at:5}}},{progress:{},ratings:{},review:{a:{v:{b:0,d:2},at:9},b:{v:{b:1,d:1},at:1}},days:{'2026-10-25':{v:1,at:1}}});
+ assert.deepEqual(m.review,{a:{v:{b:0,d:2},at:9},b:{v:{b:1,d:1},at:1}});assert.deepEqual(m.days,{'2026-10-25':{v:1,at:1}});
+ const S=require('../sync.js');assert.equal(S.records({version:1,sessions:[],phrases:[],audio:{progress:{},ratings:{},days:{'2026-10-25':{v:1,at:1}}}}).length,1);
 });

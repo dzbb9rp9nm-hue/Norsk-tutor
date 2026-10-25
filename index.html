@@ -28,6 +28,7 @@
 <section id="practice-view" aria-label="Practice">
 <div id="welcome">
 <div class="welcome-heading"><h2>Small conversations.<br><em>Real confidence.</em></h2><p>Choose a situation, or simply have a chat.<br>Your tutor will help you find the words.</p></div>
+<section id="today-card" class="today-card" aria-labelledby="today-title"><div><span id="today-date" class="eyebrow">TODAY</span><h3 id="today-title">Your daily practice</h3><p id="today-summary"></p><p id="today-streak" class="today-streak"></p></div><button id="today-start" class="primary">Start today's practice →</button></section>
 <button id="free-chat" class="free-chat">Just feel like talking? <strong>Start a free conversation →</strong></button>
 <div class="scenario-browser">
 <div class="scenario-filters"><label for="scenario-search">Find a situation<input id="scenario-search" type="search" maxlength="100" placeholder="Try hotel, food, or weekend…"></label><label for="scenario-category">Browse by topic<select id="scenario-category"><option value="all">All topics</option><option>Food &amp; drink</option><option>Travel</option><option>Daily life</option><option>People &amp; leisure</option></select></label></div>
@@ -38,6 +39,17 @@
 
 <div class="welcome-tip"><span aria-hidden="true">✦</span><p><strong>No perfect sentences needed.</strong> Speak a little Norwegian, ask for help in English, and use hints whenever you like.</p></div>
 </div>
+<section id="review" class="audio-player-panel review-panel" hidden aria-label="Today's review">
+<div class="lesson-header"><div><span id="review-step" class="eyebrow">TODAY'S REVIEW</span><h2 id="review-prompt" class="review-prompt"></h2><p id="review-instruction" class="field-note" role="status"></p></div><button id="review-leave" class="subtle">Leave review</button></div>
+<div id="review-card">
+<div id="review-answer" class="audio-cue review-answer" hidden><p id="review-nb" lang="nb"></p><span id="review-source" class="eyebrow"></span></div>
+<div id="review-reveal-actions" class="audio-controls"><button id="review-show" class="primary">Show the Norwegian</button></div>
+<div id="review-rate-actions" class="audio-controls" hidden><button id="review-hear" class="subtle">Hear it again</button><button id="review-slower" class="subtle">Slower</button><button id="review-again" class="subtle">Practise again</button><button id="review-got" class="primary">Got it</button></div>
+</div>
+<div id="review-done" hidden><p id="review-done-text"></p><div class="audio-controls"><button id="review-conversation" class="primary">Now use them in a conversation →</button><button id="review-finish" class="subtle">Done for today</button></div></div>
+<progress id="review-progress" aria-label="Review progress" max="1" value="0"></progress>
+<p class="field-note">Your voice is not recorded or graded. Be honest with yourself: “Practise again” simply brings a phrase back sooner.</p>
+</section>
 <section id="lesson" hidden aria-label="Current conversation">
 <div class="lesson-header"><div><span class="eyebrow">TODAY'S PRACTICE</span><h2 id="lesson-title"></h2><p id="lesson-goal"></p></div><button id="new-session" class="subtle">Save &amp; new</button></div>
 <details id="phrase-help" class="phrase-help"><summary>A few phrases to get you started</summary><div id="starter-phrases"></div></details>

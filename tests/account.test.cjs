@@ -127,3 +127,10 @@ test('streamed tutor replies pass through with renewed sign-in cookie and cached
  assert.equal(sent.messages.length,3);assert.equal(sent.messages[0].content,'Hei');assert.equal(sent.messages[2].content[0].text,'[HELP_ANSWERING_LEVEL_1]');assert.equal(sent.messages[2].content[0].cache_control.type,'ephemeral');
 });
 test('tutor requests without stream still get one JSON reply',async()=>{const f=await fixture();const r=await f.request('tutor',{owner,job:{kind:'message',text:'Hei'},scenario:'cafe',corrections:'gentle',messages:[]},f.cookie);assert.equal(r.status,200);assert.deepEqual(await r.json(),{content:[],stop_reason:'end_turn'});assert.equal(JSON.parse(f.calls.at(-1).options.body).stream,undefined);});
+test('server accepts the daily review schedule in the progress record and strips anything else',async()=>{
+ const f=await fixture();const audio={record_id:'a0d10000-0000-4000-8000-000000000001',kind:'audio',revision:0,deleted:false,body:{progress:{},ratings:{},review:{'p:x':{v:{b:2,d:20760,junk:1},at:5}},days:{'2026-10-25':{v:1,at:5}},extra:'x'}};
+ let r=await f.request('save',{owner,record:audio},f.cookie);assert.equal(r.status,400,'unknown review fields are refused');
+ audio.body.review['p:x'].v={b:2,d:20760};r=await f.request('save',{owner,record:audio},f.cookie);assert.equal(r.status,200);
+ const sent=JSON.parse(f.calls.filter(c=>c.url.includes('save_learning_record')).at(-1).options.body).p_body;
+ assert.deepEqual(sent,{progress:{},ratings:{},review:{'p:x':{v:{b:2,d:20760},at:5}},days:{'2026-10-25':{v:1,at:5}}});
+});

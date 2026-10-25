@@ -55,6 +55,7 @@ let epoch = 0, busy = false, controller = null, retryJob = null, view = "practic
 let recognition = null, listening = false, recognitionId = 0, silenceTimer = null, autoTimer = null;
 let speechId = 0, speaking = false;
 let phraseOrigin = "";
+let review = null; // Today's review in progress: {queue, pos, revealed, again, reviewed, remembered}
 
 function id(){return crypto.randomUUID();}
 function notice(message){$("notice").textContent=message;$("notice").hidden=!message;}
@@ -128,7 +129,7 @@ function showView(next){
 function renderScenarios(){
   const query=$("scenario-search").value.trim().toLocaleLowerCase();
   const category=$("scenario-category").value||"all";
-  const all=Object.entries(SCENARIOS).filter(([key])=>key!=="free");
+  const all=Object.entries(SCENARIOS).filter(([,s])=>!s.hidden).filter(([key])=>key!=="free");
   const matches=all.filter(([,s])=>(category==="all"||s.category===category)&&[s.title,s.goal,s.category].join(" ").toLocaleLowerCase().includes(query));
   $("scenario-grid").replaceChildren();
   for(const [key,s] of matches){
@@ -142,7 +143,7 @@ function renderScenarios(){
 }
 function startSession(scenario){
   if(!Object.hasOwn(SCENARIOS,scenario))return;
-  cancelWork();
+  cancelWork();review=null;
   const config=SCENARIOS[scenario];
   const now=new Date().toISOString();
   const opening={parts:[{t:config.opening,lang:"nb"}],trans:config.translation,heard:"",listen:"nb"};
@@ -150,12 +151,12 @@ function startSession(scenario){
   data.sessions.unshift(active);data.activeId=active.id;save();renderLesson();showView("practice");
   setStatus("Speak or type a reply. Open the phrase card if you need a hand.");
 }
-function newSession(){cancelWork();if(active)touch();active=null;data.activeId=null;save();renderLesson();showView("practice");}
+function newSession(){cancelWork();review=null;if(active)touch();active=null;data.activeId=null;save();renderLesson();showView("practice");}
 function renderLesson(){
-  $("welcome").hidden=!!active;$("lesson").hidden=!active;
+  $("welcome").hidden=!!active||!!review;$("lesson").hidden=!active||!!review;$("review").hidden=!review;
   $("chat").replaceChildren();$("starter-phrases").replaceChildren();
   $("draft").value=active?.draft||"";
-  if(!active){controls();return;}
+  if(!active){if(review)renderReview();else renderToday();controls();return;}
   const config=SCENARIOS[active.scenario];
   $("lesson-title").textContent=config.title;$("lesson-goal").textContent=config.goal;
   $("input-language").value=active.inputLanguage||"nb-NO";
@@ -351,6 +352,8 @@ function parseReply(raw,recap=false){
 }
 // Corrections from the latest finished recaps and the newest saved phrases, so the tutor can bring them back.
 function learnerMemory(){
+  // Today's conversation focuses on the phrases reviewed that day.
+  if(active?.scenario==="today"){const focus=todayFocus(active);if(focus.length)return cleanMemory({corrections:[],phrases:focus.map(i=>({nb:i.nb,en:i.en}))});}
   const corrections=[];
   for(const session of [...data.sessions].filter(s=>s.completed&&s.id!==active?.id).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))){
     for(const m of session.messages)if(m.kind==="recap")for(const c of m.recap.corrections)if(c.better&&!corrections.some(x=>x.better===c.better))corrections.push({better:c.better,english:c.english});
@@ -360,7 +363,7 @@ function learnerMemory(){
 }
 function systemPrompt(){
   const correction={gentle:"Naturally model correct wording without interrupting the conversation.",immediate:"Briefly explain clear language errors as they occur. Match the learner's language and keep it beginner-friendly.",recap:"Do not correct mid-conversation. Save clear language corrections for the final recap."}[prefs.corrections];
-  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory());
+  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory(),active.scenario==="today");
 }
 async function runJob(job){
   if(busy||!active||active.completed)return;
@@ -395,7 +398,7 @@ async function runJob(job){
     active.api.push({role:"user",content:job.text},{role:"assistant",content:JSON.stringify(result)});
     if(job.kind==="message"){
       active.messages.push({kind:"user",text:job.text,lang:job.lang,heard:result.heard});
-      active.draft="";active.hintLevel=0;
+      active.draft="";active.hintLevel=0;markPractised();
     }
     if(job.kind==="hint")active.hintLevel=job.level;
     active.messages.push({kind:job.kind==="recap"?"recap":job.kind==="hint"?"hint":"tutor",...result});
@@ -419,6 +422,65 @@ async function runJob(job){
 function sendDraft(){const text=$("draft").value.trim();if(text&&!listening)runJob({kind:"message",text,lang:$("input-language").value.startsWith("en")?"en":"nb"});}
 function getHint(){const level=Math.min(3,(active?.hintLevel||0)+1);runJob({kind:"hint",level,text:`[HELP_ANSWERING_LEVEL_${level}]`});}
 function finishSession(){if($("draft").value.trim()){setStatus("Send your draft first, or clear it before finishing.");return;}runJob({kind:"recap",text:"[SESSION_RECAP]"});}
+
+// ---- Today: a short spaced review of saved phrases and recap corrections, then a conversation ----
+function markPractised(){setAudioEntry("days",dayKey(),1);}
+// Phrases reviewed on the day a Today conversation started, so the tutor can bring them in.
+function todayFocus(session){
+  const day=dayNumber(new Date(session.createdAt)),state=data.audio?.review||{};
+  return reviewItems(data).filter(i=>state[i.key]&&dayNumber(new Date(state[i.key].at))===day).slice(0,8);
+}
+function renderToday(){
+  const today=dayNumber(),due=dueReview(data,today),days=data.audio?.days||{},total=reviewItems(data).length;
+  $("today-date").textContent="TODAY · "+new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"}).toUpperCase();
+  if(!total){$("today-title").textContent="Your daily practice";$("today-summary").textContent="Save phrases or finish a recap, and they'll come back here for a quick daily review. For now, start with a short conversation.";$("today-start").textContent="Start today's conversation →";}
+  else if(due.length){$("today-title").textContent=`${due.length} ${due.length===1?"phrase":"phrases"} to review`;$("today-summary").textContent="About 10 minutes: recall each phrase aloud, then use them in a short conversation.";$("today-start").textContent="Start today's practice →";}
+  else{$("today-title").textContent=days[dayKey()]?"Review done for today ✓":"Nothing to review today ✓";$("today-summary").textContent="Phrases come back just before you're likely to forget them. You can still have today's conversation.";$("today-start").textContent="Have today's conversation →";}
+  const streak=practiceStreak(days,today),month=Object.keys(days).filter(k=>k.startsWith(dayKey().slice(0,7))).length,plural=n=>`${n} ${n===1?"day":"days"}`;
+  $("today-streak").textContent=streak?`${plural(streak).replace(" ","-").replace(/s$/,"")} streak · ${plural(month)} practised this month`:month?`${plural(month)} practised this month`:"Practise today to start a streak.";
+}
+function startToday(){
+  const queue=dueReview(data);
+  if(!queue.length){startSession("today");return;}
+  cancelWork();if(active)touch();active=null;data.activeId=null;save();
+  review={queue,pos:0,revealed:false,again:new Set(),reviewed:0,remembered:0};
+  showView("practice");renderLesson();$("review-show").focus?.();
+}
+function renderReview(){
+  if(!review)return;
+  const finished=review.pos>=review.queue.length;
+  $("review-card").hidden=finished;$("review-done").hidden=!finished;$("review-leave").hidden=finished;
+  $("review-progress").max=review.queue.length;$("review-progress").value=review.pos;
+  if(finished){
+    $("review-step").textContent="TODAY'S REVIEW · COMPLETE";$("review-prompt").textContent="Nicely done.";$("review-prompt").lang="en";
+    $("review-instruction").textContent="";
+    const tricky=review.reviewed-review.remembered;
+    $("review-done-text").textContent=`You reviewed ${review.reviewed} ${review.reviewed===1?"phrase":"phrases"}${tricky?` (${tricky} will come back tomorrow)`:""}. Now put them to work: your tutor will give you a natural chance to use each one in a short conversation.`;
+    return;
+  }
+  const item=review.queue[review.pos],english=!!item.en.trim();
+  $("review-step").textContent=`TODAY'S REVIEW · ${review.pos+1} OF ${review.queue.length}`;
+  $("review-prompt").textContent=english?item.en:"Listen, then say it aloud.";$("review-prompt").lang="en";
+  $("review-instruction").textContent=review.revealed?"Did you have it? Your answer only decides when this phrase comes back.":english?"How would you say this in Norwegian? Say it aloud, then check.":"This phrase has no English meaning saved. Play it, repeat it, and think what it means.";
+  $("review-show").textContent=english?"Show the Norwegian":"Play the phrase";
+  $("review-nb").textContent=item.nb;$("review-source").textContent=item.origin;
+  $("review-answer").hidden=!review.revealed;$("review-reveal-actions").hidden=review.revealed;$("review-rate-actions").hidden=!review.revealed;
+}
+function revealReview(){
+  if(!review||review.pos>=review.queue.length)return;
+  warmSpeech();review.revealed=true;renderReview();speakParts([{t:review.queue[review.pos].nb,lang:"nb"}]);$("review-got").focus?.();
+}
+function rateReview(remembered){
+  if(!review||!review.revealed||review.pos>=review.queue.length)return;
+  const item=review.queue[review.pos],second=review.again.has(item.key);
+  setAudioEntry("review",item.key,nextReview(data.audio?.review?.[item.key]?.v,remembered));
+  if(!second){review.reviewed++;if(remembered)review.remembered++;}
+  if(!remembered&&!second){review.again.add(item.key);review.queue.push(item);}// one more try at the end
+  review.pos++;review.revealed=false;stopAudio();
+  if(review.pos>=review.queue.length)markPractised();
+  renderReview();(review.pos>=review.queue.length?$("review-conversation"):$("review-show")).focus?.();
+}
+function leaveReview(){stopAudio();review=null;renderLesson();}
 
 function openPhrase(nb="",en="",origin=""){
   stopRecognition();stopAudio();phraseOrigin=origin;
@@ -454,8 +516,8 @@ function openSettings(){
 function setAudioEntry(group,key,value){
   if(typeof key!=="string"||!key||key.length>100||key==="__proto__")return;
   if(!data.audio)data.audio={progress:{},ratings:{}};
-  const current=data.audio[group][key];if(current&&current.v===value)return;
-  data.audio={...data.audio,[group]:{...data.audio[group],[key]:{v:value,at:Date.now()}}};save();
+  const entries=data.audio[group]||{},current=entries[key];if(current&&JSON.stringify(current.v)===JSON.stringify(value))return;
+  data.audio={...data.audio,[group]:{...entries,[key]:{v:value,at:Date.now()}}};save();
 }
 window.audioProgressStore={
   position:key=>data.audio?.progress[key]?.v,
@@ -509,6 +571,15 @@ $("draft").addEventListener("input",()=>{if(active){active.draft=$("draft").valu
 $("draft").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendDraft();}});
 $("input-language").addEventListener("change",()=>{if(active){active.inputLanguage=$("input-language").value;touch();}});
 $("mic-button").addEventListener("click",()=>{if(listening)recognition?.finish();else startListening();});
+$("today-start").addEventListener("click",startToday);
+$("review-show").addEventListener("click",revealReview);
+$("review-hear").addEventListener("click",()=>{if(review?.queue[review.pos])speakParts([{t:review.queue[review.pos].nb,lang:"nb"}]);});
+$("review-slower").addEventListener("click",()=>{if(review?.queue[review.pos])speakParts([{t:review.queue[review.pos].nb,lang:"nb"}],null,.65);});
+$("review-got").addEventListener("click",()=>rateReview(true));
+$("review-again").addEventListener("click",()=>rateReview(false));
+$("review-leave").addEventListener("click",leaveReview);
+$("review-finish").addEventListener("click",leaveReview);
+$("review-conversation").addEventListener("click",()=>{review=null;startSession("today");});
 $("stop-audio").addEventListener("click",()=>{stopAudio();setStatus("Playback stopped. Your turn when you're ready.");});
 $("hint-button").addEventListener("click",getHint);$("finish-button").addEventListener("click",finishSession);
 $("retry").addEventListener("click",()=>{if(retryJob)runJob(retryJob);});$("dismiss-retry").addEventListener("click",()=>{retryJob=null;controls();});

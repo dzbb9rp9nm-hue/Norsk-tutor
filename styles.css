@@ -29,3 +29,12 @@
   .audio-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .audio-options select{min-width:0;width:100%}
 }
+
+/* Today: daily practice card and review */
+.today-card{display:flex;gap:20px;align-items:center;justify-content:space-between;border:1px solid var(--line);border-left:6px solid var(--green);border-radius:14px;background:var(--white);padding:20px 22px;margin:4px 0 18px}
+.today-card h3{font:26px Georgia,serif;margin:8px 0 6px}.today-card p{margin:0 0 6px;color:var(--muted);font-size:14px;max-width:560px}
+.today-card .today-streak{color:var(--green);font-weight:650;margin:8px 0 0}.today-card button{flex-shrink:0}
+.review-prompt{font:30px Georgia,serif;margin:10px 0 8px;overflow-wrap:anywhere}
+.review-answer p{font:28px Georgia,serif;margin:0 0 8px;overflow-wrap:anywhere}
+.review-panel progress{width:100%;margin:14px 0 6px}
+@media(max-width:760px){.today-card{flex-direction:column;align-items:stretch;padding:18px}.today-card button{min-height:48px}.review-prompt{font-size:25px}.review-answer p{font-size:24px}}

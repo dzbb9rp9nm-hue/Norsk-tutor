@@ -8,7 +8,7 @@ const LearningSync=(()=>{
  const field=kind=>kind==='session'?'sessions':'phrases';
  // Lesson progress is one record per account. It is never "deleted": an empty one simply has no entries.
  const audioRecord=data=>({record_id:AUDIO_ID,kind:'audio',body:data.audio||{progress:{},ratings:{}},deleted:false});
- const hasAudio=data=>!!data.audio&&(Object.keys(data.audio.progress||{}).length+Object.keys(data.audio.ratings||{}).length)>0;
+ const hasAudio=data=>!!data.audio&&['progress','ratings','review','days'].some(g=>Object.keys(data.audio[g]||{}).length>0);
  const records=data=>[...(hasAudio(data)?[audioRecord(data)]:[]),...data.sessions.map(body=>({record_id:body.id,kind:'session',body,deleted:false})),...data.phrases.map(body=>({record_id:body.id,kind:'phrase',body,deleted:false}))];
  const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==="object"&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
  const equal=(a,b)=>!!a?.deleted===!!b?.deleted&&(a?.deleted||canonical(a?.body??null)===canonical(b?.body??null));
