@@ -11,7 +11,7 @@ function app(stored={}){
  const timers=new Map();let timerId=0;const spoken=[];let latestRecognition;
  class Recognition {constructor(){latestRecognition=this}start(){}stop(){this.onend?.()}abort(){this.onend?.()}}
  const context=vm.createContext({console,crypto:webcrypto,TextDecoder,TextEncoder,AbortController,AbortSignal,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
- vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('call-mode.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,startToday,revealReview,rateReview,leaveReview,renderToday,dueReview,reviewItems,dayNumber,dayKey,get review(){return review},renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
+ vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('call-mode.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,goToday,startToday,revealReview,rateReview,leaveReview,renderToday,dueReview,reviewItems,dayNumber,dayKey,get review(){return review},renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
  return {context,api:context.testing,get,store,timers,spoken,recognition:()=>latestRecognition};
 }
 const reply={parts:[{t:'Vil du ha melk?',lang:'nb'}],trans:'Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
@@ -421,4 +421,16 @@ test('hands-free: a real sentence still goes to the tutor as a message',async()=
  speakTo(a,'Jeg vil gjerne ha en kaffe.');
  await flush();await flush();
  assert.equal(a.api.state.active.messages.filter(m=>m.kind==='user').length,1);
+});
+
+test('Today menu button saves an open conversation and shows the Today card, with a due count',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});withPhrases(a,[['Takk for sist','Thanks for last time'],['Jeg er sulten','I am hungry']]);
+ a.api.startSession('cafe');const open=a.api.state.active.id;assert.equal(a.get('welcome').hidden,true);
+ assert.equal(a.get('today-count').textContent,'2');assert.equal(a.get('today-count').hidden,false);
+ a.api.showView('notebook');a.api.goToday();
+ assert.equal(a.api.state.active,null);assert.equal(a.get('welcome').hidden,false);assert.equal(a.get('practice-view').hidden,false);
+ assert.ok(a.api.state.data.sessions.some(s=>s.id===open),'the open conversation is kept in saved sessions');
+ assert.equal(a.get('today-title').textContent,'2 phrases to review');
+ a.api.startToday();a.api.revealReview();a.api.rateReview(true);assert.equal(a.get('today-count').textContent,'1');
+ a.api.revealReview();a.api.rateReview(true);assert.equal(a.get('today-count').hidden,true);
 });

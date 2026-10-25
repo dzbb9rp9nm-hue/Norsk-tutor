@@ -154,6 +154,7 @@ function startSession(scenario){
 }
 function newSession(){cancelWork();review=null;if(active)touch();active=null;data.activeId=null;save();renderLesson();showView("practice");}
 function renderLesson(){
+  updateTodayCount();
   $("welcome").hidden=!!active||!!review;$("lesson").hidden=!active||!!review;$("review").hidden=!review;
   $("chat").replaceChildren();$("starter-phrases").replaceChildren();
   $("draft").value=active?.draft||"";
@@ -508,6 +509,13 @@ function renderToday(){
   const streak=practiceStreak(days,today),month=Object.keys(days).filter(k=>k.startsWith(dayKey().slice(0,7))).length,plural=n=>`${n} ${n===1?"day":"days"}`;
   $("today-streak").textContent=streak?`${plural(streak).replace(" ","-").replace(/s$/,"")} streak · ${plural(month)} practised this month`:month?`${plural(month)} practised this month`:"Practise today to start a streak.";
 }
+function updateTodayCount(){const n=dueReview(data).length;$("today-count").textContent=String(n);$("today-count").hidden=!n;$("today-nav").setAttribute("aria-label",n?`Today, ${n} ${n===1?"phrase":"phrases"} to review`:"Today");}
+// Menu button: save any open conversation (it stays in Saved sessions) and show the Today card.
+function goToday(){
+  cancelWork();review=null;if(active)touch();active=null;data.activeId=null;save();
+  showView("practice");renderLesson();
+  $("today-card").scrollIntoView?.({block:"center"});$("today-start").focus?.();
+}
 function startToday(){
   const queue=dueReview(data);
   if(!queue.length){startSession("today");return;}
@@ -547,6 +555,7 @@ function rateReview(remembered){
   if(!remembered&&!second){review.again.add(item.key);review.queue.push(item);}// one more try at the end
   review.pos++;review.revealed=false;stopAudio();
   if(review.pos>=review.queue.length)markPractised();
+  updateTodayCount();
   renderReview();(review.pos>=review.queue.length?$("review-conversation"):$("review-show")).focus?.();
 }
 function leaveReview(){stopAudio();review=null;renderLesson();}
@@ -641,6 +650,7 @@ $("draft").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.ctrlKey||e.meta
 $("input-language").addEventListener("change",()=>{if(active){active.inputLanguage=$("input-language").value;touch();}});
 $("mic-button").addEventListener("click",()=>{if(listening)recognition?.finish();else startListening();});
 $("today-start").addEventListener("click",startToday);
+$("today-nav").addEventListener("click",goToday);
 $("review-show").addEventListener("click",revealReview);
 $("review-hear").addEventListener("click",()=>{if(review?.queue[review.pos])speakParts([{t:review.queue[review.pos].nb,lang:"nb"}]);});
 $("review-slower").addEventListener("click",()=>{if(review?.queue[review.pos])speakParts([{t:review.queue[review.pos].nb,lang:"nb"}],null,.65);});

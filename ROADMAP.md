@@ -5,10 +5,8 @@
 Done 18 October 2026: tutor moved to Claude Sonnet 5.5; Easier / Just right / Stretch me setting ("difficulty adjustment" below).
 
 1. ~~**Sync audio-lesson progress.**~~ Built 10 October 2026, together with changed-since sync downloads. Live 18 October 2026 (migration 003 run in Supabase).
-2. ~~**Daily "Today" practice.**~~ Built 25 October 2026 (needs migration 004 in Supabase for syncing). About 10 minutes: spaced review of saved phrases and recap corrections, then a short conversation that must use them. Builds on "learning that carries over" below. First step done 18 October: the tutor now brings recent recap corrections and saved phrases back into conversation.
 3. **Phone-in-pocket call mode.** In progress 12 November 2026: call-mode groundwork (earcons, spoken commands, wake lock) and an iPhone app shell with native speech engines are built; next step is a real-device test on Matthew's iPhone (see NATIVE-SETUP.md), then tuning from what it shows.
 2. ~~**Daily "Today" practice.**~~ Built and live 25 October 2026 (migration 004 run the same day). About 10 minutes: spaced review of saved phrases and recap corrections, then a short conversation that must use them. Builds on "learning that carries over" below. First step done 18 October: the tutor now brings recent recap corrections and saved phrases back into conversation.
-3. **Phone-in-pocket call mode.** Fully hands-free conversation on iPhone; depends on real-device tests of browser mic/speech behaviour.
 
 
 Housekeeping: production SMTP for recovery email; confirm Supabase inactivity pausing.
