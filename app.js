@@ -171,7 +171,7 @@ function renderMessage(message){
   wrapper.append(el("span",mine?"YOU":message.kind==="hint"?"A LITTLE HELP":"YOUR TUTOR","speaker"));
   const bubble=el("div",undefined,"bubble");
   if(mine){const p=el("p",message.text);p.lang=message.lang||"nb";bubble.append(p);}
-  else {for(const part of message.parts){const span=el("span",part.t+" ");span.lang=part.lang;bubble.append(span);}}
+  else {for(const part of message.parts){if(part.br&&bubble.children?.length)bubble.append(el("br"));const span=el("span",part.t+" ");span.lang=part.lang;bubble.append(span);}}
   wrapper.append(bubble);
   const actions=el("div",undefined,"message-actions");
   const translation=mine?message.heard:message.trans;
@@ -270,7 +270,7 @@ function streamedParts(text){
       if(depth===0){
         let part;try{part=JSON.parse(text.slice(start,i+1));}catch{return out;}
         if(!part||typeof part.t!=="string"||!part.t.trim()||!["nb","en"].includes(part.lang))return out;
-        out.push({t:part.t,lang:part.lang});
+        out.push(part.br===true?{t:part.t,lang:part.lang,br:true}:{t:part.t,lang:part.lang});
       }
     }
     else if(c==="]"&&depth===0)break;
@@ -347,8 +347,8 @@ function parseReply(raw,recap=false){
     if(!r||typeof r.good!=="string"||!r.good.trim()||typeof r.next!=="string"||!r.next.trim()||!Array.isArray(r.corrections)||r.corrections.length>4||!r.corrections.every(c=>c&&["original","better","why","english"].every(k=>typeof c[k]==="string")))throw new Error("The recap was incomplete. Please try again.");
     return {recap:{good:r.good,next:r.next,corrections:r.corrections.map(c=>({original:c.original,better:c.better,why:c.why,english:c.english}))}};
   }
-  if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>20||!value.parts.every(p=>p&&typeof p.t==="string"&&p.t.length<=5000&&p.t.trim()&&["nb","en"].includes(p.lang)))throw new Error("The tutor's reply was incomplete. Please try again.");
-  return {parts:value.parts.map(p=>({t:p.t,lang:p.lang})),trans:typeof value.trans==="string"?value.trans:"",heard:typeof value.heard==="string"?value.heard:"",listen:value.listen==="en"?"en":"nb"};
+  if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>60||!value.parts.every(p=>p&&typeof p.t==="string"&&p.t.length<=5000&&p.t.trim()&&["nb","en"].includes(p.lang)))throw new Error("The tutor's reply was incomplete. Please try again.");
+  return {parts:value.parts.map(p=>p.br===true?{t:p.t,lang:p.lang,br:true}:{t:p.t,lang:p.lang}),trans:typeof value.trans==="string"?value.trans:"",heard:typeof value.heard==="string"?value.heard:"",listen:value.listen==="en"?"en":"nb"};
 }
 // Corrections from the latest finished recaps and the newest saved phrases, so the tutor can bring them back.
 function learnerMemory(){
@@ -363,7 +363,7 @@ function learnerMemory(){
 }
 function systemPrompt(){
   const correction={gentle:"Naturally model correct wording without interrupting the conversation.",immediate:"Briefly explain clear language errors as they occur. Match the learner's language and keep it beginner-friendly.",recap:"Do not correct mid-conversation. Save clear language corrections for the final recap."}[prefs.corrections];
-  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory(),active.scenario==="today");
+  return SYSTEM_PROMPT+`\n\nCURRENT SESSION RULES (override conflicting defaults above):\n${SCENARIOS[active.scenario].role}\nCorrection preference: ${correction}\nYou receive text only, not audio. Never assess pronunciation or claim to hear sounds. Treat odd transcriptions as uncertain; do not count uncertain recognition mistakes as learner errors.\nUse beginner Bokmål. The learner can change the topic or ask for English help.\nThe scenario never limits explanations: if the learner asks you to explain, translate, simplify or break something down, pause the role play and follow EXPLAINING above, then pick the scenario up again when they are ready.\nThe app may supply the most recent 40 conversation messages; base feedback only on the examples actually present.\n`+tutorExtras(prefs.level,learnerMemory(),active.scenario==="today");
 }
 async function runJob(job){
   if(busy||!active||active.completed)return;
@@ -374,11 +374,14 @@ async function runJob(job){
   const current=epoch,sessionId=active.id;
   controller=new AbortController();const request=controller;busy=true;controls();
   setStatus(job.kind==="recap"?"Preparing your recap…":job.kind==="hint"?"Finding a little help…":"Tutor is thinking…");
-  const timeout=setTimeout(()=>request.abort(),30000);
+  // Gives up after 30 seconds without progress. While a reply is streaming in, the wait restarts
+  // with each new piece, so long explanations can finish (up to 90 seconds in all).
+  let timeout=setTimeout(()=>request.abort(),30000);const ceiling=setTimeout(()=>request.abort(),90000);
+  const progress=()=>{clearTimeout(timeout);timeout=setTimeout(()=>request.abort(),30000);};
   const alive=()=>current===epoch&&active?.id===sessionId;
   let speech=null;
   try{
-    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:850,stream:true,...cachedRequest(systemPrompt(),jobRules(job),[...active.api.slice(-40),{role:"user",content:job.text}])};
+    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:job.kind==="hint"?850:1500,stream:true,...cachedRequest(systemPrompt(),jobRules(job),[...active.api.slice(-40),{role:"user",content:job.text}])};
     const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40),stream:true}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
     if(!alive())return;
     if(!response.ok)throw new Error(response.status===401?account?"Your sign-in expired. Sign in again from Account & saving. Your draft is kept.":"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
@@ -386,7 +389,7 @@ async function runJob(job){
     if(typeof response.body?.getReader==="function"&&/event-stream/i.test(response.headers?.get?.("content-type")||"")){
       // Streamed reply: start speaking each sentence as soon as it has fully arrived.
       speech=job.kind!=="recap"&&canSpeakReply()?speechStream():null;
-      ({text:raw,stop}=await readStream(response,text=>{if(speech&&alive())speech.update(streamedParts(text));}));
+      ({text:raw,stop}=await readStream(response,text=>{progress();if(speech&&alive())speech.update(streamedParts(text));}));
     }else{
       const payload=await response.json();
       raw=(payload.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");stop=payload.stop_reason;
@@ -417,7 +420,7 @@ async function runJob(job){
     if(speech?.started)stopAudio();
     retryJob=job;$("retry-message").textContent=error.name==="AbortError"?"The tutor took too long. Your words are safe; try again.":error instanceof TypeError?"Couldn't reach the tutor. Check your connection and try again.":error.message;
     setStatus("Your words are kept. You can retry or edit your message.");
-  }finally{clearTimeout(timeout);if(alive()){busy=false;controller=null;controls();}}
+  }finally{clearTimeout(timeout);clearTimeout(ceiling);if(alive()){busy=false;controller=null;controls();}}
 }
 function sendDraft(){const text=$("draft").value.trim();if(text&&!listening)runJob({kind:"message",text,lang:$("input-language").value.startsWith("en")?"en":"nb"});}
 function getHint(){const level=Math.min(3,(active?.hintLevel||0)+1);runJob({kind:"hint",level,text:`[HELP_ANSWERING_LEVEL_${level}]`});}

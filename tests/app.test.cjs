@@ -346,3 +346,25 @@ test('review schedule and practice days are validated, merged newest-first, and 
  assert.deepEqual(m.review,{a:{v:{b:0,d:2},at:9},b:{v:{b:1,d:1},at:1}});assert.deepEqual(m.days,{'2026-10-25':{v:1,at:1}});
  const S=require('../sync.js');assert.equal(S.records({version:1,sessions:[],phrases:[],audio:{progress:{},ratings:{},days:{'2026-10-25':{v:1,at:1}}}}).length,1);
 });
+// English breakdowns: word-for-word lists need many parts and line breaks.
+const breakdown={parts:[{t:'Word for word:',lang:'en'},...['Jeg','vil','gjerne','ha','en','kaffe','med','melk','og','sukker','takk'].flatMap(w=>[{t:w,lang:'nb',br:true},{t:'– meaning',lang:'en'}]),{t:'Now try it yourself.',lang:'en',br:true}],trans:'',heard:'',listen:'nb'};
+test('long English breakdowns are accepted and keep their line breaks',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');
+ const parsed=a.api.parseReply(JSON.stringify(breakdown));assert.equal(parsed.parts.length,24);assert.equal(parsed.parts[1].br,true);assert.equal(parsed.parts[2].br,undefined);
+ assert.equal(a.api.parseReply(JSON.stringify({...breakdown,parts:[{t:'x',lang:'nb',br:'yes'}]})).parts[0].br,undefined);
+ assert.throws(()=>a.api.parseReply(JSON.stringify({...breakdown,parts:Array.from({length:61},()=>({t:'x',lang:'en'}))})),/incomplete/);
+ assert.equal(a.api.streamedParts(JSON.stringify(breakdown).slice(0,120)).find(p=>p.t==='Jeg').br,true);
+ let sent;a.get('draft').value='Can you break that down word for word?';a.get('draft').events.input();
+ a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return streamed(JSON.stringify(breakdown)).response;};
+ await a.api.runJob({kind:'message',text:'Can you break that down word for word?',lang:'en'});
+ assert.equal(sent.max_tokens,1500);assert.match(sent.system.map(b=>b.text).join('\n'),/EXPLAINING[\s\S]*never limits explanations/);
+ const last=a.api.state.active.messages.at(-1);assert.equal(last.parts.length,24);
+ const bubble=a.get('chat').children.at(-1).children.find(c=>c.className==='bubble');assert.equal(bubble.children.filter(c=>c.className===undefined&&c.textContent===''&&!c.lang).length>=11,true);
+});
+test('the 30-second wait restarts while a reply is still streaming in',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');draft(a);
+ const before=a.api.state.active.api.length;let made=0;const set=a.context.setTimeout;a.context.setTimeout=(fn,delay)=>{if(delay===30000)made++;return set(fn,delay);};
+ a.context.fetch=async()=>streamed(JSON.stringify(reply),{chunks:4}).response;await a.api.runJob(job);
+ assert.ok(made>1);assert.equal(a.api.state.active.api.length,before+2);assert.equal(a.api.state.retryJob,null);
+ assert.ok(![...a.timers.values()].some(t=>t.delay===30000||t.delay===90000));
+});
