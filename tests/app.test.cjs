@@ -248,11 +248,11 @@ test('streamed reply starts speaking the first part before the rest arrives, the
  assert.equal(voiced().length,2);// nothing spoken twice
  assert.equal(sent.stream,true);assert.equal(sent.system[0].cache_control.type,'ephemeral');assert.equal(sent.messages.at(-1).content[0].cache_control.type,'ephemeral');assert.equal(sent.messages.at(-1).content[0].text,job.text);
 });
-test('streamed error or cut-off reply commits nothing, stops speech and offers retry',async()=>{
+test('streamed error or cut-off reply with nothing usable commits nothing, stops speech and offers retry',async()=>{
  const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');draft(a);
  a.context.fetch=async()=>streamed(JSON.stringify(reply),{error:true}).response;await a.api.runJob(job);
  assert.equal(a.api.state.active.api.length,2);assert.ok(a.api.state.retryJob);assert.match(a.get('retry-message').textContent,/busy/);
- a.context.fetch=async()=>streamed(JSON.stringify(reply),{stop:'max_tokens'}).response;await a.api.runJob(job);
+ a.context.fetch=async()=>streamed(JSON.stringify(reply).slice(0,20),{stop:'max_tokens'}).response;await a.api.runJob(job);
  assert.equal(a.api.state.active.api.length,2);assert.match(a.get('retry-message').textContent,/cut short/);
  a.context.fetch=async()=>streamed(JSON.stringify(reply)).response;await a.api.runJob(job);
  assert.equal(a.api.state.active.api.length,4);assert.equal(a.api.state.active.messages.filter(m=>m.kind==='user').length,1);
@@ -357,7 +357,7 @@ test('long English breakdowns are accepted and keep their line breaks',async()=>
  let sent;a.get('draft').value='Can you break that down word for word?';a.get('draft').events.input();
  a.context.fetch=async(url,options)=>{sent=JSON.parse(options.body);return streamed(JSON.stringify(breakdown)).response;};
  await a.api.runJob({kind:'message',text:'Can you break that down word for word?',lang:'en'});
- assert.equal(sent.max_tokens,1500);assert.match(sent.system.map(b=>b.text).join('\n'),/EXPLAINING[\s\S]*never limits explanations/);
+ assert.equal(sent.max_tokens,2500);assert.match(sent.system.map(b=>b.text).join('\n'),/EXPLAINING[\s\S]*never limits explanations/);
  const last=a.api.state.active.messages.at(-1);assert.equal(last.parts.length,24);
  const bubble=a.get('chat').children.at(-1).children.find(c=>c.className==='bubble');assert.equal(bubble.children.filter(c=>c.className===undefined&&c.textContent===''&&!c.lang).length>=11,true);
 });
@@ -367,4 +367,17 @@ test('the 30-second wait restarts while a reply is still streaming in',async()=>
  a.context.fetch=async()=>streamed(JSON.stringify(reply),{chunks:4}).response;await a.api.runJob(job);
  assert.ok(made>1);assert.equal(a.api.state.active.api.length,before+2);assert.equal(a.api.state.retryJob,null);
  assert.ok(![...a.timers.values()].some(t=>t.delay===30000||t.delay===90000));
+});
+
+test('a long explanation cut off part-way keeps its complete lines and offers to continue',async()=>{
+ const a=app({'nt_key':'sk-ant-test'});a.api.startSession('cafe');
+ const glossy={parts:[{t:'Word for word:',lang:'en'},...['Jeg','vil','gjerne','ha','en','kaffe'].map(w=>({t:w,lang:'nb',gloss:'meaning of '+w}))],trans:'',heard:'',listen:'en'};
+ const text=JSON.stringify(glossy),cut=text.slice(0,text.indexOf('"ha"')+12);
+ a.context.fetch=async()=>streamed(cut,{stop:'max_tokens'}).response;
+ await a.api.runJob({kind:'message',text:'Break that down word for word',lang:'en'});
+ const last=a.api.state.active.messages.at(-1);assert.equal(a.api.state.retryJob,null);
+ assert.equal(last.parts.slice(1,4).map(p=>p.t).join(' '),'Jeg vil gjerne');assert.equal(last.parts[1].gloss,'meaning of Jeg');
+ assert.match(last.parts.at(-1).t,/continue/);assert.equal(last.parts.at(-1).br,true);
+ for(let i=0;i<6&&a.spoken.at(-1)?.onend;i++)a.spoken.at(-1).onend();assert.ok(a.spoken.some(u=>u.text==='meaning of Jeg'),a.spoken.map(u=>u.text).join('|'));
+ assert.equal(a.api.parseReply(JSON.stringify({parts:[{t:'x',lang:'en',gloss:'y'}]})).parts[0].gloss,undefined);
 });

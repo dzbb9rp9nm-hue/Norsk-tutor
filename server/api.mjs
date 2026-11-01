@@ -139,7 +139,7 @@ export function createAPI(env=process.env,transport=fetch){
    // app can start speaking the first sentence early. Older app versions get one JSON reply.
    const stream=body.stream===true;
    const request=tutorPrompt.cachedRequest(systemPrompt({scenario},{corrections,level,memory:body.memory}),tutorPrompt.jobRules(job),[...messages,{role:'user',content:job.text}]);
-   const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:job.kind==='recap'?1400:job.kind==='hint'?850:1500,...request,...(stream?{stream:true}:{})}),signal:AbortSignal.timeout(25000)});
+   const response=await transport('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:job.kind==='recap'?1400:job.kind==='hint'?850:2500,...request,...(stream?{stream:true}:{})}),signal:AbortSignal.timeout(28000)});
    if(!response.ok)fail(response.status===429?429:502,'The tutor could not respond. Please try again.');
    if(stream&&response.body){const headers=new Headers({'content-type':'text/event-stream','cache-control':'no-store','x-content-type-options':'nosniff'});for(const c of ctx.cookies)headers.append('set-cookie',c);return new Response(response.body,{status:200,headers});}
    const answer=await response.json();return reply({content:answer.content,stop_reason:answer.stop_reason});

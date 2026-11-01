@@ -171,7 +171,7 @@ function renderMessage(message){
   wrapper.append(el("span",mine?"YOU":message.kind==="hint"?"A LITTLE HELP":"YOUR TUTOR","speaker"));
   const bubble=el("div",undefined,"bubble");
   if(mine){const p=el("p",message.text);p.lang=message.lang||"nb";bubble.append(p);}
-  else {for(const part of message.parts){if(part.br&&bubble.children?.length)bubble.append(el("br"));const span=el("span",part.t+" ");span.lang=part.lang;bubble.append(span);}}
+  else {for(const part of message.parts){if((part.br||part.gloss)&&bubble.children?.length)bubble.append(el("br"));const span=el("span",part.t+" ");span.lang=part.lang;bubble.append(span);if(part.gloss){const gloss=el("span","– "+part.gloss+" ","gloss");gloss.lang="en";bubble.append(gloss);}}}
   wrapper.append(bubble);
   const actions=el("div",undefined,"message-actions");
   const translation=mine?message.heard:message.trans;
@@ -196,7 +196,7 @@ function renderRecap(message){
 function speakParts(parts,onDone=null,rate=prefs.speed){
   stopRecognition();stopAudio();
   if(!window.speechSynthesis||!window.SpeechSynthesisUtterance){notice("This browser can't play spoken replies. You can still read and type.");return;}
-  const current=speechId;let i=0;
+  parts=spoken(parts);const current=speechId;let i=0;
   speaking=true;controls();setStatus("Tutor is speaking. Use Stop playback to pause.");
   const next=()=>{
     if(current!==speechId)return;
@@ -245,7 +245,7 @@ function speechStream(rate=prefs.speed){
       if(!ok||current!==speechId||ended)return;
       for(;pushed<parts.length;pushed++){
         if(pushed===0){speaking=true;controls();setStatus("Tutor is speaking. Use Stop playback to pause.");}
-        queue.push(parts[pushed]);
+        queue.push(...spoken([parts[pushed]]));
       }
       if(!playing&&queue.length)next();
     },
@@ -270,7 +270,8 @@ function streamedParts(text){
       if(depth===0){
         let part;try{part=JSON.parse(text.slice(start,i+1));}catch{return out;}
         if(!part||typeof part.t!=="string"||!part.t.trim()||!["nb","en"].includes(part.lang))return out;
-        out.push(part.br===true?{t:part.t,lang:part.lang,br:true}:{t:part.t,lang:part.lang});
+        if(!validPart(part))return out;
+        out.push(cleanPart(part));
       }
     }
     else if(c==="]"&&depth===0)break;
@@ -292,7 +293,8 @@ async function readStream(response,onText){
     else if(event.type==="error")throw new Error(event.error?.type==="overloaded_error"?"The tutor is very busy right now. Please try again in a moment.":"The tutor couldn't respond right now. Please try again.");
   };
   for(;;){
-    const {done,value}=await reader.read();
+    // If the connection drops part-way, keep what arrived; the caller decides whether it is usable.
+    let done,value;try{({done,value}=await reader.read());}catch(error){if(text)return {text,stop:"interrupted"};throw error;}
     if(value)buffer+=decoder.decode(value,{stream:true});
     let n;while((n=buffer.indexOf("\n"))>=0){const line=buffer.slice(0,n).replace(/\r$/,"");buffer=buffer.slice(n+1);handle(line);}
     if(done){handle(buffer.trim());break;}
@@ -337,6 +339,12 @@ function startListening(){
   catch{stopRecognition();notice("The microphone couldn't start. Try again, or type your reply.");}
 }
 
+// A reply part: text to show and speak. Explanations may add "br" (start a new line) and, on
+// Norwegian parts, "gloss" (the English meaning, shown after it and read in the English voice).
+function validPart(p){return !!p&&typeof p.t==="string"&&p.t.length<=5000&&!!p.t.trim()&&["nb","en"].includes(p.lang)&&(p.gloss===undefined||typeof p.gloss==="string"&&p.gloss.length<=500);}
+function cleanPart(p){const out={t:p.t,lang:p.lang};if(p.br===true)out.br=true;if(p.lang==="nb"&&typeof p.gloss==="string"&&p.gloss.trim())out.gloss=p.gloss;return out;}
+// What is read aloud: each gloss follows its Norwegian, in the English voice.
+function spoken(parts){return parts.flatMap(p=>p.gloss?[{t:p.t,lang:p.lang},{t:p.gloss,lang:"en"}]:[{t:p.t,lang:p.lang}]);}
 function parseReply(raw,recap=false){
   if(typeof raw!=="string"||raw.length>60000)throw new Error("The reply was too large. Please try again.");
   let value;
@@ -347,8 +355,8 @@ function parseReply(raw,recap=false){
     if(!r||typeof r.good!=="string"||!r.good.trim()||typeof r.next!=="string"||!r.next.trim()||!Array.isArray(r.corrections)||r.corrections.length>4||!r.corrections.every(c=>c&&["original","better","why","english"].every(k=>typeof c[k]==="string")))throw new Error("The recap was incomplete. Please try again.");
     return {recap:{good:r.good,next:r.next,corrections:r.corrections.map(c=>({original:c.original,better:c.better,why:c.why,english:c.english}))}};
   }
-  if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>60||!value.parts.every(p=>p&&typeof p.t==="string"&&p.t.length<=5000&&p.t.trim()&&["nb","en"].includes(p.lang)))throw new Error("The tutor's reply was incomplete. Please try again.");
-  return {parts:value.parts.map(p=>p.br===true?{t:p.t,lang:p.lang,br:true}:{t:p.t,lang:p.lang}),trans:typeof value.trans==="string"?value.trans:"",heard:typeof value.heard==="string"?value.heard:"",listen:value.listen==="en"?"en":"nb"};
+  if(!Array.isArray(value.parts)||!value.parts.length||value.parts.length>60||!value.parts.every(validPart))throw new Error("The tutor's reply was incomplete. Please try again.");
+  return {parts:value.parts.map(cleanPart),trans:typeof value.trans==="string"?value.trans:"",heard:typeof value.heard==="string"?value.heard:"",listen:value.listen==="en"?"en":"nb"};
 }
 // Corrections from the latest finished recaps and the newest saved phrases, so the tutor can bring them back.
 function learnerMemory(){
@@ -381,7 +389,7 @@ async function runJob(job){
   const alive=()=>current===epoch&&active?.id===sessionId;
   let speech=null;
   try{
-    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:job.kind==="hint"?850:1500,stream:true,...cachedRequest(systemPrompt(),jobRules(job),[...active.api.slice(-40),{role:"user",content:job.text}])};
+    const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:job.kind==="hint"?850:2500,stream:true,...cachedRequest(systemPrompt(),jobRules(job),[...active.api.slice(-40),{role:"user",content:job.text}])};
     const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40),stream:true}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
     if(!alive())return;
     if(!response.ok)throw new Error(response.status===401?account?"Your sign-in expired. Sign in again from Account & saving. Your draft is kept.":"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
@@ -395,8 +403,17 @@ async function runJob(job){
       raw=(payload.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");stop=payload.stop_reason;
     }
     if(!alive())return;
-    if(stop==="max_tokens")throw new Error("The reply was cut short. Please try again.");
-    const result=parseReply(raw,job.kind==="recap");
+    let result;
+    try{
+      if(stop==="max_tokens"||stop==="interrupted")throw new Error("The reply was cut short. Please try again.");
+      result=parseReply(raw,job.kind==="recap");
+    }catch(error){
+      // A long explanation that was cut off part-way: keep the complete lines and offer to continue.
+      const partial=job.kind==="recap"?[]:streamedParts(raw||"");
+      if(!partial.length)throw error;
+      result={parts:[...partial.slice(0,59),{t:"That's as far as I got in one go. Say “continue” and I'll carry on.",lang:"en",br:true}],trans:"",heard:"",listen:"en"};
+      if(speech?.started)speech.update(result.parts);
+    }
     // Only commit a turn after a complete, validated reply. Retries do not duplicate the conversation.
     active.api.push({role:"user",content:job.text},{role:"assistant",content:JSON.stringify(result)});
     if(job.kind==="message"){
