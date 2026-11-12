@@ -11,7 +11,7 @@ function app(stored={}){
  const timers=new Map();let timerId=0;const spoken=[];let latestRecognition;
  class Recognition {constructor(){latestRecognition=this}start(){}stop(){this.onend?.()}abort(){this.onend?.()}}
  const context=vm.createContext({console,crypto:webcrypto,TextDecoder,TextEncoder,AbortController,AbortSignal,Blob,URL,Date,JSON,Object,window:{scrollTo(){},addEventListener(){},SpeechRecognition:Recognition,SpeechSynthesisUtterance:function(t){this.text=t},speechSynthesis:{cancel(){},getVoices(){return []},speak(u){spoken.push(u)}}},SpeechSynthesisUtterance:function(t){this.text=t},document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],querySelector:()=>get('brand'),body:new Element(),addEventListener(){},hidden:false},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),fetch:async()=>{throw Error('Unexpected request')}});
- vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,startToday,revealReview,rateReview,leaveReview,renderToday,dueReview,reviewItems,dayNumber,dayKey,get review(){return review},renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
+ vm.runInContext(fs.readFileSync('scenarios.js','utf8')+'\n'+fs.readFileSync('tutor-prompt.js','utf8')+'\n'+fs.readFileSync('learning.js','utf8')+'\n'+fs.readFileSync('sync.js','utf8')+'\n'+fs.readFileSync('call-mode.js','utf8')+'\n'+fs.readFileSync('app.js','utf8')+'\nthis.testing={SCENARIOS,streamedParts,startToday,revealReview,rateReview,leaveReview,renderToday,dueReview,reviewItems,dayNumber,dayKey,get review(){return review},renderScenarios,startSession,newSession,runJob,parseReply,save,importLearning,startListening,stopAudio,showView,validData,sanitizeImport,exportBackup,enterAccount,syncAccount,validateRemote,get state(){return {active,data,busy,retryJob,prefs,account,cloudBase,cloudConflicts,cloudBusy,cloudPaused}}, get recognition(){return recognition}};',context);
  return {context,api:context.testing,get,store,timers,spoken,recognition:()=>latestRecognition};
 }
 const reply={parts:[{t:'Vil du ha melk?',lang:'nb'}],trans:'Would you like milk?',heard:'I would like a coffee.',listen:'nb'};
@@ -380,4 +380,45 @@ test('a long explanation cut off part-way keeps its complete lines and offers to
  assert.match(last.parts.at(-1).t,/continue/);assert.equal(last.parts.at(-1).br,true);
  for(let i=0;i<6&&a.spoken.at(-1)?.onend;i++)a.spoken.at(-1).onend();assert.ok(a.spoken.some(u=>u.text==='meaning of Jeg'),a.spoken.map(u=>u.text).join('|'));
  assert.equal(a.api.parseReply(JSON.stringify({parts:[{t:'x',lang:'en',gloss:'y'}]})).parts[0].gloss,undefined);
+});
+// ---- Call mode: spoken commands in hands-free practice ----
+const handsFreePrefs=JSON.stringify({speed:0.9,corrections:'gentle',handsFree:true,pause:5000,level:'normal'});
+function speakTo(a,text){
+ a.api.startListening();
+ const r=a.recognition();
+ r.onresult({results:[Object.assign([{transcript:text}],{isFinal:true})]});
+ [...a.timers.values()].find(t=>t.delay===5000).fn();
+}
+test('hands-free: saying "repeat" replays the tutor instead of sending, and clears the draft',async()=>{
+ const a=app({'nt_key':'sk-ant-test','nt_preferences_v1':handsFreePrefs});a.api.startSession('cafe');
+ const turns=a.api.state.active.api.length;
+ speakTo(a,'Gjenta.');
+ assert.equal(a.api.state.active.draft,'');
+ assert.equal(a.get('draft').value,'');
+ assert.ok(a.spoken.length>0,'tutor opening was replayed');
+ assert.equal(a.api.state.active.api.length,turns,'no tutor turn was spent');
+ assert.equal(a.api.state.busy,false);
+});
+test('hands-free: saying "English" switches the listening language and keeps listening',async()=>{
+ const a=app({'nt_key':'sk-ant-test','nt_preferences_v1':handsFreePrefs});a.api.startSession('cafe');
+ speakTo(a,'English');
+ assert.equal(a.get('input-language').value,'en-GB');
+ assert.equal(a.api.state.active.inputLanguage,'en-GB');
+ assert.equal(a.api.state.active.draft,'');
+ assert.ok(a.api.recognition,'listening again after the switch');
+});
+test('hands-free: "finish" before any reply asks for one instead of recapping',async()=>{
+ const a=app({'nt_key':'sk-ant-test','nt_preferences_v1':handsFreePrefs});a.api.startSession('cafe');
+ const turns=a.api.state.active.api.length;
+ speakTo(a,'Finish');
+ assert.equal(a.api.state.active.api.length,turns);
+ assert.equal(a.api.state.busy,false);
+ assert.ok(a.spoken.some(u=>/Say something first/.test(u.text)),'guidance is spoken, not only shown');
+});
+test('hands-free: a real sentence still goes to the tutor as a message',async()=>{
+ const a=app({'nt_key':'sk-ant-test','nt_preferences_v1':handsFreePrefs});a.api.startSession('cafe');
+ a.context.fetch=async()=>response();
+ speakTo(a,'Jeg vil gjerne ha en kaffe.');
+ await flush();await flush();
+ assert.equal(a.api.state.active.messages.filter(m=>m.kind==='user').length,1);
 });

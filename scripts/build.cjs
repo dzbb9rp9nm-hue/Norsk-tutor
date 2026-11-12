@@ -5,10 +5,10 @@ const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'dist');
 fs.rmSync(output, { recursive: true, force: true });
 fs.mkdirSync(output, { recursive: true });
-for (const name of ['index.html', 'app.js', 'password-reset.js', 'learning.js', 'sync.js', 'audio-lessons.js', 'audio-player.js', 'styles.css', 'scenarios.js', 'tutor-prompt.js', '_headers']) {
+for (const name of ['index.html', 'app.js', 'password-reset.js', 'learning.js', 'sync.js', 'call-mode.js', 'audio-lessons.js', 'audio-player.js', 'styles.css', 'scenarios.js', 'tutor-prompt.js', '_headers']) {
   fs.copyFileSync(path.join(root, name), path.join(output, name));
 }
-console.log('Prepared eleven app files for publication.');
+console.log('Prepared twelve app files for publication.');
 
 // Generate the streaming tutor edge function. The edge runtime loads plain ES modules and
 // cannot read the shared prompt files, which are browser-style scripts with a CommonJS

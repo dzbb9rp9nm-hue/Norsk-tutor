@@ -117,6 +117,7 @@ function stopRecognition(){
 }
 function cancelWork(){epoch++;controller?.abort();controller=null;busy=false;retryJob=null;stopRecognition();stopAudio();controls();}
 function showView(next){
+  if(next!=="practice")releaseAwake();
   if(next!=="practice"||view==="audio"){stopRecognition();stopAudio();}
   view=next;
   ["practice","audio","notebook","history"].forEach(name=>{$(name+"-view").hidden=name!==next;});
@@ -312,7 +313,9 @@ function startListening(){
   const r=new SR();recognition=r;r.lang=$("input-language").value;r.continuous=true;r.interimResults=true;
   const alive=()=>current===recognitionId&&active?.id===lessonId;
   const update=()=>{const text=[base,bank,interim].filter(Boolean).join(" ").trim().slice(0,2000);$("draft").value=text;active.draft=text;touch();controls();};
-  const end=()=>{if(!alive())return;clearTimeout(silenceTimer);recognition=null;listening=false;controls();setStatus("Check the words above, then tap Send when you're ready.");if(autoSend&&active.draft.trim())sendDraft();};
+  const end=()=>{if(!alive())return;clearTimeout(silenceTimer);recognition=null;listening=false;controls();
+    if(autoSend&&prefs.handsFree&&runCommand(voiceCommand(active.draft)))return;
+    setStatus("Check the words above, then tap Send when you're ready.");if(autoSend&&active.draft.trim())sendDraft();};
   r.onresult=e=>{
     if(!alive())return;
     const finals=[],temporary=[];
@@ -320,7 +323,7 @@ function startListening(){
     for(let i=0;i<e.results.length;i++)(e.results[i].isFinal?finals:temporary).push(e.results[i][0].transcript.trim());
     bank=finals.join(" ");interim=temporary.join(" ");update();
     clearTimeout(silenceTimer);
-    if(prefs.handsFree&&(bank||interim))silenceTimer=setTimeout(()=>{if(!alive())return;requested=true;autoSend=true;try{r.stop();}catch{end();}},prefs.pause);
+    if(prefs.handsFree&&(bank||interim))silenceTimer=setTimeout(()=>{if(!alive())return;callMode.sent();requested=true;autoSend=true;try{r.stop();}catch{end();}},prefs.pause);
   };
   r.onend=()=>{
     if(!alive())return;
@@ -331,11 +334,12 @@ function startListening(){
     if(!alive())return;
     if(e.error==="no-speech")return;
     requested=true;autoSend=false;
+    if(prefs.handsFree)callMode.error();
     notice(e.error==="not-allowed"||e.error==="service-not-allowed"?"Microphone access was blocked. Check this site's microphone permission, or type your reply.":"The microphone stopped. Your recognised words are kept below; you can edit them or type.");
     end();recognitionId++;try{r.abort();}catch{}
   };
   r.finish=()=>{requested=true;autoSend=false;try{r.stop();}catch{end();}};
-  try{r.start();listening=true;controls();setStatus(prefs.handsFree?`Listening. Sends after a ${prefs.pause/1000}-second pause.`:"Listening. Take your time, then tap Done speaking to review.");}
+  try{r.start();listening=true;controls();if(prefs.handsFree){callMode.listening();keepAwake();}setStatus(prefs.handsFree?`Listening. Sends after a ${prefs.pause/1000}-second pause. You can say "English", "repeat", "slower", "hint" or "finish".`:"Listening. Take your time, then tap Done speaking to review.");}
   catch{stopRecognition();notice("The microphone couldn't start. Try again, or type your reply.");}
 }
 
@@ -431,7 +435,7 @@ async function runJob(job){
     }
     if(job.kind==="hint")active.hintLevel=job.level;
     active.messages.push({kind:job.kind==="recap"?"recap":job.kind==="hint"?"hint":"tutor",...result});
-    if(job.kind==="recap")active.completed=true;
+    if(job.kind==="recap"){active.completed=true;releaseAwake();}
     else active.inputLanguage=result.listen==="en"?"en-GB":"nb-NO";
     busy=false;controller=null;touch();renderLesson();
     if(view==="history")renderHistory();
@@ -444,11 +448,47 @@ async function runJob(job){
   }catch(error){
     if(!alive())return;
     if(speech?.started)stopAudio();
+    if(prefs.handsFree)callMode.error();
     retryJob=job;$("retry-message").textContent=error.name==="AbortError"?"The tutor took too long. Your words are safe; try again.":error instanceof TypeError?"Couldn't reach the tutor. Check your connection and try again.":error.message;
     setStatus("Your words are kept. You can retry or edit your message.");
   }finally{clearTimeout(timeout);clearTimeout(ceiling);if(alive()){busy=false;controller=null;controls();}}
 }
 function sendDraft(){const text=$("draft").value.trim();if(text&&!listening)runJob({kind:"message",text,lang:$("input-language").value.startsWith("en")?"en":"nb"});}
+// ---- Call mode: spoken commands and keeping the screen awake while hands-free ----
+// The screen wake lock stops the phone sleeping mid-conversation. The browser releases it
+// when the page is hidden; the next listening turn simply requests it again.
+let wakeLock=null;
+function keepAwake(){if(typeof navigator==="undefined"||!navigator.wakeLock)return;navigator.wakeLock.request("screen").then(lock=>{wakeLock=lock;},()=>{});}
+function releaseAwake(){try{wakeLock?.release();}catch{}wakeLock=null;}
+function lastTutorParts(){for(let i=active.messages.length-1;i>=0;i--)if(active.messages[i].kind==="tutor"&&active.messages[i].parts)return active.messages[i].parts;return null;}
+// Runs a spoken command and reports whether it was one. Commands never count as a turn:
+// the draft is cleared and, where the command keeps the conversation going, listening resumes.
+function runCommand(command){
+  if(!command||!active||active.completed)return false;
+  const resume=()=>{if(prefs.handsFree&&view==="practice"&&!busy)startListening();};
+  // Guidance must be heard, not just shown: in a pocket the status line is invisible.
+  const say=(text,onDone)=>{setStatus(text);speakParts([{t:text,lang:"en"}],onDone);};
+  const clear=()=>{active.draft="";$("draft").value="";touch();controls();};
+  if(command==="english"||command==="norwegian"){
+    clear();const lang=command==="english"?"en-GB":"nb-NO";
+    $("input-language").value=lang;active.inputLanguage=lang;touch();
+    setStatus(command==="english"?"Switched to English. Listening.":"Byttet til norsk. Lytter.");resume();return true;
+  }
+  if(command==="repeat"||command==="slower"){
+    const parts=lastTutorParts();if(!parts)return false;
+    clear();setStatus(command==="slower"?"Playing that again, slower.":"Playing that again.");
+    speakParts(parts,resume,command==="slower"?Math.max(.55,prefs.speed-.2):prefs.speed);return true;
+  }
+  if(command==="hint"){
+    if((active.hintLevel||0)>=3){say("All hints for this turn are shown. Try a reply.",resume);return true;}
+    clear();getHint();return true;
+  }
+  if(command==="recap"){
+    if(!active.messages.some(m=>m.kind==="user")){say("Say something first, then finish for a recap.",resume);return true;}
+    clear();finishSession();return true;
+  }
+  return false;
+}
 function getHint(){const level=Math.min(3,(active?.hintLevel||0)+1);runJob({kind:"hint",level,text:`[HELP_ANSWERING_LEVEL_${level}]`});}
 function finishSession(){if($("draft").value.trim()){setStatus("Send your draft first, or clear it before finishing.");return;}runJob({kind:"recap",text:"[SESSION_RECAP]"});}
 
@@ -617,7 +657,7 @@ $("phrase-form").addEventListener("submit",e=>{e.preventDefault();const nb=$("ph
 $("settings-form").addEventListener("submit",e=>{
   e.preventDefault();const key=$("api-key").value.trim();if(key&&!key.startsWith("sk-ant-")){$("settings-error").textContent="A Claude API key starts with sk-ant-. Please check it and try again.";return;}
   const next=safePrefs({speed:Number($("speech-speed").value),corrections:$("correction-style").value,handsFree:$("hands-free").checked,pause:Number($("thinking-time").value),level:$("tutor-level").value});
-  try{if(key)localStorage.setItem("nt_key",key);localStorage.setItem(PREFS_KEY,JSON.stringify(next));Object.assign(prefs,next);$("api-key").value="";$("settings-dialog").close();notice("Preferences saved. You're ready to practise.");}
+  try{if(key)localStorage.setItem("nt_key",key);localStorage.setItem(PREFS_KEY,JSON.stringify(next));Object.assign(prefs,next);if(!prefs.handsFree)releaseAwake();$("api-key").value="";$("settings-dialog").close();notice("Preferences saved. You're ready to practise.");}
   catch{$("settings-error").textContent="This browser couldn't save your preferences. Check that browser storage is allowed.";}
 });
 $("settings-dialog").addEventListener("close",()=>{$("api-key").value="";});
