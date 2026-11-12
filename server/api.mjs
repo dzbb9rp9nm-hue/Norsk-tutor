@@ -3,6 +3,7 @@ import learning from '../learning.js';
 import scenarios from '../scenarios.js';
 import systemPrompt from './prompt.cjs';
 import tutorPrompt from '../tutor-prompt.js';
+import {validTutor} from './tutor-stream.mjs';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION='__Host-nt_session';
 const SIGN_IN_DAYS=30;
@@ -131,7 +132,7 @@ export function createAPI(env=process.env,transport=fetch){
   if(route==='tutor'){
    if(!env.ANTHROPIC_API_KEY)fail(503,'The account tutor is not configured yet.');
    const {job,scenario,messages,corrections}=body,level=body.level??'normal';
-   if(!job||!['message','hint','recap'].includes(job.kind)||typeof job.text!=='string'||!job.text.trim()||job.text.length>2000||!Object.hasOwn(scenarios,scenario)||!['gentle','immediate','recap'].includes(corrections)||!['easier','normal','stretch'].includes(level)||body.memory!==undefined&&(typeof body.memory!=='object'||body.memory===null||JSON.stringify(body.memory).length>8000)||!Array.isArray(messages)||messages.length>40||messages.length%2!==0||!messages.every((m,i)=>m&&m.role===(i%2?'assistant':'user')&&typeof m.content==='string'&&m.content.length<=20000)||job.kind==='hint'&&![1,2,3].includes(job.level))fail(400,'Invalid tutor request.');
+   if(!validTutor(body,scenarios))fail(400,'Invalid tutor request.');
    if(JSON.stringify(messages).length>100000)fail(413,'This conversation is too long for one request.');
    const allowed=await upstream('/rest/v1/rpc/claim_tutor_request',{method:'POST',token,body:{}});
    if(allowed!==true)fail(429,'You have reached the practice limit. Please try again later.');

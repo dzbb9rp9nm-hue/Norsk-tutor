@@ -7,3 +7,4 @@ node_modules/
 *.pem
 *.key
 .netlify/
+netlify/edge-functions/tutor-stream.mjs

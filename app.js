@@ -390,7 +390,16 @@ async function runJob(job){
   let speech=null;
   try{
     const body={model:"claude-sonnet-5-5",max_tokens:job.kind==="recap"?1400:job.kind==="hint"?850:2500,stream:true,...cachedRequest(systemPrompt(),jobRules(job),[...active.api.slice(-40),{role:"user",content:job.text}])};
-    const response=account?await fetch("/api/account/tutor",{method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40),stream:true}),signal:request.signal}):await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
+    let response;
+    if(account){
+      const init={method:"POST",headers:{"content-type":"application/json","x-norsk-request":"1"},body:JSON.stringify({owner:account.id,job,scenario:active.scenario,corrections:prefs.corrections,level:prefs.level,memory:learnerMemory(),messages:active.api.slice(-40),stream:true}),signal:request.signal};
+      // The streaming route has no reply-length ceiling. Fall back to the classic route when it
+      // is unavailable or the sign-in cookie needs renewing (only the classic route renews), but
+      // not on 429: the practice limit was already counted and a retry would count it again.
+      response=await fetch("/api/account/tutor-stream",init).catch(error=>{if(request.signal.aborted)throw error;return null;});
+      if(!response||!response.ok&&response.status!==429)response=await fetch("/api/account/tutor",init);
+    }
+    else response=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":getKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body),signal:request.signal});
     if(!alive())return;
     if(!response.ok)throw new Error(response.status===401?account?"Your sign-in expired. Sign in again from Account & saving. Your draft is kept.":"Your API key was rejected. Update it in Settings.":response.status===429?"The tutor is receiving too many requests. Wait a moment and try again.":"The tutor couldn't respond right now. Please try again.");
     let raw,stop;
