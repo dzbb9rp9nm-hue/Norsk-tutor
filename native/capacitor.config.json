@@ -1,0 +1,9 @@
+{
+  "appId": "com.matthewmears.norsktutor",
+  "appName": "Norsk Tutor",
+  "webDir": "www",
+  "server": {
+    "url": "https://norsktutor.netlify.app",
+    "allowNavigation": ["norsktutor.netlify.app"]
+  }
+}
